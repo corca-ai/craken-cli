@@ -183,11 +183,11 @@ func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
 	if _, err := fmt.Fprint(stdout, `Craken CLI
 
 Authentication:
-  craken auth login --profile PROFILE
-  craken auth import-token --profile PROFILE --token -
+  craken auth login
+  craken auth import-token --token -
 
 Catalog commands:
-  craken commands --profile PROFILE --format text
+  craken commands --format text
   craken do OPERATION_ID [options]
   craken get|post|put|patch|delete PATH [options]
 

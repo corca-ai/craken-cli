@@ -58,7 +58,7 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 				"operationId": "custom.operation",
 			}},
 			"examples": []map[string]any{{
-				"command":     "craken do custom.operation --profile PROFILE",
+				"command":     "craken do custom.operation",
 				"description": "Run the server-provided example",
 			}},
 			"routes": []map[string]any{{
@@ -92,6 +92,8 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 		"e.g. craken custom run --name demo",
 		"custom.operation\tPOST\t/api/custom\tRun a custom operation",
 		"craken do OPERATION_ID",
+		"craken auth login",
+		"craken commands --format text",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("expected help to contain %q, got:\n%s", expected, help)
@@ -103,6 +105,8 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 	for _, stale := range []string{
 		"Server-advertised shortcuts:",
 		"custom run|inspect",
+		"craken auth login --profile PROFILE",
+		"craken commands --profile PROFILE --format text",
 		"workspace list|get|create|delete",
 		"workspace|channel|dm|file|folder|wiki|agent|dream",
 	} {
