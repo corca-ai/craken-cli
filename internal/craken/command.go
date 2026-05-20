@@ -163,14 +163,21 @@ func printHelp(stdout io.Writer) {
 Usage:
   craken auth login --profile ak
   craken auth import-token --profile ak --token -
-  craken workspace list --profile ak
-  craken workspace create --profile ak --name test0
-  craken channel send --profile ak --workspace test0 --channel general hello
-  craken dm send --profile ak --workspace test0 --target orca hello
-  craken workspace subs --profile ak --workspace test0 --pretty
   craken commands --profile ak --format text
   craken do workspaces.list --profile ak
   craken get /api/workspaces --profile ak
+
+Command discovery:
+  craken commands --profile ak --format text
+      List the server-owned /api/client catalog available to your bearer session.
+  craken do OPERATION_ID [options]
+      Invoke a catalog operation by id.
+  craken get|post|put|patch|delete PATH [options]
+      Call an API path directly.
+
+Dedicated shortcuts:
+  workspace, channel, dm, file, folder, wiki, agent, and dream wrap common stable flows.
+  Use craken commands for the authoritative operation list and capability-filtered sysop routes.
 
 Global options:
   --profile NAME           Credential profile. Defaults to CRAKEN_PROFILE or default.
@@ -184,14 +191,7 @@ Resources:
   do OPERATION_ID
   get|post|put|patch|delete PATH
   auth login|import-token
-  workspace list|get|create|delete|snapshot|activity|invite|accept|subs|tail
-  channel list|create|update|delete|join|leave|add-member|messages|send
-  dm send|messages|list
-  file list|upload|get|download|update-content|patch|move|rename|delete
-  folder create|update|move|rename|delete
-  wiki list|get|save|delete|restore|deleted|recent|versions|version|diff
-  agent create|jobs|job|watch|interrupt|stop|plan-check
-  dream run|issue-smoke
+  workspace|channel|dm|file|folder|wiki|agent|dream
   api METHOD PATH
 
 Generic request options:

@@ -39,6 +39,33 @@ func TestImportTokenStoresReusableProfile(t *testing.T) {
 	}
 }
 
+func TestHelpPointsToServerCatalogInsteadOfListingEveryOperation(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", nil, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	help := stdout.String()
+	for _, expected := range []string{
+		"craken commands --profile ak --format text",
+		"server-owned /api/client catalog",
+		"craken do OPERATION_ID",
+		"workspace|channel|dm|file|folder|wiki|agent|dream",
+	} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("expected help to contain %q, got:\n%s", expected, help)
+		}
+	}
+	for _, stale := range []string{
+		"workspace list|get|create|delete",
+		"channel list|create|update|delete",
+		"wiki list|get|save|delete",
+	} {
+		if strings.Contains(help, stale) {
+			t.Fatalf("expected help not to hard-code operation list %q, got:\n%s", stale, help)
+		}
+	}
+}
+
 func TestWorkspaceAcceptUsesProfileBearerWhenTokenIsInvitationAlias(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
