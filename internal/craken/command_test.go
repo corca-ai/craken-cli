@@ -277,6 +277,79 @@ func TestBrowserLoginGetCallbackWithoutTokenReturnsDiagnosticPage(t *testing.T) 
 	}
 }
 
+func TestBrowserLoginInvalidStateDoesNotAbortCurrentLogin(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+
+	loginURLCh := make(chan string, 1)
+	openBrowser = func(target string) {
+		loginURLCh <- target
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(context.Background(), "dev", []string{"auth", "login", "--profile", "browser", "--base-url", "https://craken.example", "--timeout-ms", "5000"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	}()
+
+	loginURL := <-loginURLCh
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirectURI, err := url.Parse(parsed.Query().Get("redirect_uri"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badValues := url.Values{
+		"session":   {`{"email":"stale@example.com"}`},
+		"state":     {"stale-state"},
+		"token":     {"stale-token"},
+		"tokenType": {"Bearer"},
+	}
+	badResponse, err := http.PostForm(redirectURI.String(), badValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badBody, err := io.ReadAll(badResponse.Body)
+	_ = badResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if badResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 stale callback, got %d", badResponse.StatusCode)
+	}
+	if !strings.Contains(string(badBody), "different login attempt") {
+		t.Fatalf("expected stale state diagnostic, got %s", string(badBody))
+	}
+
+	goodValues := url.Values{
+		"session":   {`{"email":"browser@example.com"}`},
+		"state":     {parsed.Query().Get("state")},
+		"token":     {"browser-token"},
+		"tokenType": {"Bearer"},
+	}
+	goodResponse, err := http.PostForm(redirectURI.String(), goodValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = goodResponse.Body.Close()
+	if goodResponse.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 current callback, got %d", goodResponse.StatusCode)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Profiles["browser"].Token; got != "browser-token" {
+		t.Fatalf("expected current token, got %q", got)
+	}
+}
+
 func TestRawPostReadsJSONFromFile(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)

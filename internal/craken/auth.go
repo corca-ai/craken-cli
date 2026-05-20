@@ -117,8 +117,9 @@ func receiveBrowserLogin(ctx context.Context, baseURL string, state string, time
 				return
 			}
 			if values.Get("state") != state {
-				errCh <- fmt.Errorf("browser login returned an invalid state")
-				http.Error(w, "Invalid login state", http.StatusBadRequest)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprint(w, "<!doctype html><title>Craken CLI Login</title><p>Craken CLI callback reached, but it belongs to a different login attempt. Close old Craken CLI login tabs, return to the current authorization tab, and click Authorize CLI again while the terminal command is still running.</p>")
 				return
 			}
 			token := trim(values.Get("token"))
