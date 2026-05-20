@@ -39,26 +39,59 @@ func TestImportTokenStoresReusableProfile(t *testing.T) {
 	}
 }
 
-func TestHelpPointsToServerCatalogInsteadOfListingEveryOperation(t *testing.T) {
+func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	var seenAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuthorization = r.Header.Get("Authorization")
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"examples": []map[string]any{{
+				"command":     "craken do custom.operation --profile PROFILE",
+				"description": "Run the server-provided example",
+			}},
+			"routes": []map[string]any{{
+				"auth":        "required",
+				"description": "Run a custom operation",
+				"id":          "custom.operation",
+				"method":      "POST",
+				"path":        "/api/custom",
+				"requestBody": "json",
+			}},
+			"schemaVersion": 1,
+			"shortcuts": []map[string]any{{
+				"actions":     []string{"run", "inspect"},
+				"description": "Custom shortcuts",
+				"resource":    "custom",
+			}},
+		})
+	}))
+	defer server.Close()
+
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), "dev", nil, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), "dev", []string{"--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	help := stdout.String()
 	for _, expected := range []string{
-		"craken commands --profile ak --format text",
-		"server-owned /api/client catalog",
+		"craken do custom.operation --profile PROFILE",
+		"custom run|inspect",
+		"custom.operation\tPOST\t/api/custom\tRun a custom operation",
 		"craken do OPERATION_ID",
-		"workspace|channel|dm|file|folder|wiki|agent|dream",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("expected help to contain %q, got:\n%s", expected, help)
 		}
 	}
+	if seenAuthorization != "" {
+		t.Fatalf("expected anonymous catalog request, got auth %q", seenAuthorization)
+	}
 	for _, stale := range []string{
 		"workspace list|get|create|delete",
-		"channel list|create|update|delete",
-		"wiki list|get|save|delete",
+		"workspace|channel|dm|file|folder|wiki|agent|dream",
 	} {
 		if strings.Contains(help, stale) {
 			t.Fatalf("expected help not to hard-code operation list %q, got:\n%s", stale, help)

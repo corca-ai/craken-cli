@@ -26,6 +26,25 @@ type route struct {
 	Stream      string `json:"stream,omitempty"`
 }
 
+type clientCatalog struct {
+	BuildID       string           `json:"buildId"`
+	Examples      []commandExample `json:"examples,omitempty"`
+	Routes        []route          `json:"routes"`
+	SchemaVersion int              `json:"schemaVersion"`
+	Shortcuts     []shortcut       `json:"shortcuts,omitempty"`
+}
+
+type commandExample struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+type shortcut struct {
+	Actions     []string `json:"actions"`
+	Description string   `json:"description"`
+	Resource    string   `json:"resource"`
+}
+
 func runCommands(ctx context.Context, client *client, cmd command, stdout io.Writer) error {
 	catalog, err := client.json(ctx, "GET", "/api/client", nil)
 	if err != nil {
@@ -113,33 +132,51 @@ func runRawHTTP(ctx context.Context, client *client, method string, path string,
 }
 
 func routesFromCatalog(value any) ([]route, error) {
+	catalog, err := catalogFromValue(value)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.Routes, nil
+}
+
+func catalogFromValue(value any) (clientCatalog, error) {
 	root, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("client command catalog must be an object")
+		return clientCatalog{}, fmt.Errorf("client command catalog must be an object")
 	}
 	if number, ok := root["schemaVersion"].(float64); !ok || number != 1 {
-		return nil, fmt.Errorf("client command catalog schemaVersion must be 1")
+		return clientCatalog{}, fmt.Errorf("client command catalog schemaVersion must be 1")
 	}
-	items, ok := root["routes"].([]any)
-	if !ok {
-		return nil, fmt.Errorf("client command catalog routes must be an array")
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return clientCatalog{}, err
 	}
-	routes := make([]route, 0, len(items))
-	for _, item := range items {
-		bytes, err := json.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-		var route route
-		if err := json.Unmarshal(bytes, &route); err != nil {
-			return nil, err
-		}
+	var catalog clientCatalog
+	if err := json.Unmarshal(bytes, &catalog); err != nil {
+		return clientCatalog{}, err
+	}
+	if catalog.SchemaVersion != 1 {
+		return clientCatalog{}, fmt.Errorf("client command catalog schemaVersion must be 1")
+	}
+	if catalog.Routes == nil {
+		return clientCatalog{}, fmt.Errorf("client command catalog routes must be an array")
+	}
+	for _, route := range catalog.Routes {
 		if route.ID == "" || route.Method == "" || route.Path == "" || route.Description == "" || route.Auth == "" || route.RequestBody == "" {
-			return nil, fmt.Errorf("invalid route in client command catalog")
+			return clientCatalog{}, fmt.Errorf("invalid route in client command catalog")
 		}
-		routes = append(routes, route)
 	}
-	return routes, nil
+	for _, example := range catalog.Examples {
+		if trim(example.Command) == "" || trim(example.Description) == "" {
+			return clientCatalog{}, fmt.Errorf("invalid example in client command catalog")
+		}
+	}
+	for _, shortcut := range catalog.Shortcuts {
+		if trim(shortcut.Resource) == "" || len(shortcut.Actions) == 0 || trim(shortcut.Description) == "" {
+			return clientCatalog{}, fmt.Errorf("invalid shortcut in client command catalog")
+		}
+	}
+	return catalog, nil
 }
 
 func requestFromDiscoveredRoute(route route, cmd command, stdin io.Reader) (string, requestSpec, error) {

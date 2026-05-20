@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 )
 
 const (
@@ -26,8 +27,7 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 		return err
 	}
 	if cmd.Help || cmd.Resource == "" {
-		printHelp(stdout)
-		return nil
+		return runHelp(ctx, cmd, stdout)
 	}
 	if cmd.Resource == "version" || cmd.Resource == "--version" || cmd.Resource == "-version" {
 		_, err := fmt.Fprintln(stdout, version)
@@ -157,27 +157,39 @@ func (cmd command) withPositionals(positionals []string) command {
 	return cmd
 }
 
-func printHelp(stdout io.Writer) {
-	_, _ = fmt.Fprint(stdout, `Craken CLI
+func runHelp(ctx context.Context, cmd command, stdout io.Writer) error {
+	logger, err := newLogger(cmd.string("log-file", ""))
+	if err != nil {
+		return err
+	}
+	defer logger.close()
 
-Usage:
-  craken auth login --profile ak
-  craken auth import-token --profile ak --token -
-  craken commands --profile ak --format text
-  craken do workspaces.list --profile ak
-  craken get /api/workspaces --profile ak
+	client, err := newCatalogClient(cmd, logger)
+	if err != nil {
+		return err
+	}
+	value, err := client.json(ctx, "GET", "/api/client", nil)
+	if err != nil {
+		return err
+	}
+	catalog, err := catalogFromValue(value)
+	if err != nil {
+		return err
+	}
+	return printCatalogHelp(stdout, catalog)
+}
 
-Command discovery:
-  craken commands --profile ak --format text
-      List the server-owned /api/client catalog available to your bearer session.
+func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
+	if _, err := fmt.Fprint(stdout, `Craken CLI
+
+Authentication:
+  craken auth login --profile PROFILE
+  craken auth import-token --profile PROFILE --token -
+
+Catalog commands:
+  craken commands --profile PROFILE --format text
   craken do OPERATION_ID [options]
-      Invoke a catalog operation by id.
   craken get|post|put|patch|delete PATH [options]
-      Call an API path directly.
-
-Dedicated shortcuts:
-  workspace, channel, dm, file, folder, wiki, agent, and dream wrap common stable flows.
-  Use craken commands for the authoritative operation list and capability-filtered sysop routes.
 
 Global options:
   --profile NAME           Credential profile. Defaults to CRAKEN_PROFILE or default.
@@ -186,19 +198,48 @@ Global options:
   --base-url URL           Defaults to CRAKEN_BASE_URL or https://craken.borca.ai.
   --log-file PATH          Optional HTTP step log. No log file is created by default.
 
-Resources:
-  commands|catalog
-  do OPERATION_ID
-  get|post|put|patch|delete PATH
-  auth login|import-token
-  workspace|channel|dm|file|folder|wiki|agent|dream
-  api METHOD PATH
-
 Generic request options:
   --json JSON              JSON request body. Use - to read from stdin.
   --json-file PATH         JSON request body file.
   --format json|ndjson|text|raw|none
   --accept MIME            Override the HTTP Accept header.
   --save-token-profile NAME
-`)
+`); err != nil {
+		return err
+	}
+
+	if len(catalog.Examples) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nServer examples:\n"); err != nil {
+			return err
+		}
+		for _, example := range catalog.Examples {
+			if _, err := fmt.Fprintf(stdout, "  %s\n      %s\n", example.Command, example.Description); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(catalog.Shortcuts) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nServer-advertised shortcuts:\n"); err != nil {
+			return err
+		}
+		for _, shortcut := range catalog.Shortcuts {
+			if _, err := fmt.Fprintf(stdout, "  %s %s\n      %s\n", shortcut.Resource, strings.Join(shortcut.Actions, "|"), shortcut.Description); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(catalog.Routes) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nServer operations:\n"); err != nil {
+			return err
+		}
+		for _, route := range catalog.Routes {
+			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\n", route.ID, route.Method, route.Path, route.Description); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
