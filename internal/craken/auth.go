@@ -102,33 +102,39 @@ func receiveBrowserLogin(ctx context.Context, baseURL string, state string, time
 	errCh := make(chan error, 1)
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/callback" {
+			if r.URL.Path != "/callback" {
 				http.NotFound(w, r)
 				return
 			}
-			if err := r.ParseForm(); err != nil {
+			if r.Method != http.MethodPost && r.Method != http.MethodGet {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			values, err := callbackValues(r)
+			if err != nil {
 				errCh <- err
 				http.Error(w, "Invalid callback", http.StatusBadRequest)
 				return
 			}
-			if r.PostForm.Get("state") != state {
+			if values.Get("state") != state {
 				errCh <- fmt.Errorf("browser login returned an invalid state")
 				http.Error(w, "Invalid login state", http.StatusBadRequest)
 				return
 			}
-			token := trim(r.PostForm.Get("token"))
+			token := trim(values.Get("token"))
 			if token == "" {
-				errCh <- fmt.Errorf("browser login did not return a token")
-				http.Error(w, "Missing token", http.StatusBadRequest)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprint(w, "<!doctype html><title>Craken CLI Login</title><p>Craken CLI callback reached, but no token was provided. Return to the authorization tab and click Authorize CLI again while the terminal command is still running.</p>")
 				return
 			}
 			var session any
-			if raw := r.PostForm.Get("session"); raw != "" {
+			if raw := values.Get("session"); raw != "" {
 				_ = json.Unmarshal([]byte(raw), &session)
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = fmt.Fprint(w, "<!doctype html><title>Craken CLI Login</title><p>Craken CLI login complete. You can close this tab.</p>")
-			resultCh <- loginResult{Session: session, Token: token, TokenType: firstNonEmpty(r.PostForm.Get("tokenType"), "Bearer")}
+			resultCh <- loginResult{Session: session, Token: token, TokenType: firstNonEmpty(values.Get("tokenType"), "Bearer")}
 		}),
 	}
 	go func() {
@@ -161,6 +167,16 @@ func receiveBrowserLogin(ctx context.Context, baseURL string, state string, time
 	case result := <-resultCh:
 		return result, nil
 	}
+}
+
+func callbackValues(r *http.Request) (url.Values, error) {
+	if r.Method == http.MethodGet {
+		return r.URL.Query(), nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return nil, err
+	}
+	return r.PostForm, nil
 }
 
 func buildLoginURL(baseURL string, port int, state string) (string, error) {

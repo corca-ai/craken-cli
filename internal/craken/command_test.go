@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -168,6 +169,111 @@ func TestBrowserLoginStoresCallbackToken(t *testing.T) {
 	}
 	if got := cfg.Profiles["browser"].Token; got != "browser-token" {
 		t.Fatalf("expected browser token, got %q", got)
+	}
+}
+
+func TestBrowserLoginAcceptsGetCallbackToken(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+
+	loginURLCh := make(chan string, 1)
+	openBrowser = func(target string) {
+		loginURLCh <- target
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(context.Background(), "dev", []string{"auth", "login", "--profile", "browser", "--base-url", "https://craken.example", "--timeout-ms", "5000"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	}()
+
+	loginURL := <-loginURLCh
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirectURI, err := url.Parse(parsed.Query().Get("redirect_uri"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := redirectURI.Query()
+	params.Set("session", `{"email":"browser@example.com"}`)
+	params.Set("state", parsed.Query().Get("state"))
+	params.Set("token", "browser-token")
+	params.Set("tokenType", "Bearer")
+	redirectURI.RawQuery = params.Encode()
+
+	response, err := http.Get(redirectURI.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 callback, got %d", response.StatusCode)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Profiles["browser"].Token; got != "browser-token" {
+		t.Fatalf("expected browser token, got %q", got)
+	}
+}
+
+func TestBrowserLoginGetCallbackWithoutTokenReturnsDiagnosticPage(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+
+	loginURLCh := make(chan string, 1)
+	openBrowser = func(target string) {
+		loginURLCh <- target
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, "dev", []string{"auth", "login", "--profile", "browser", "--base-url", "https://craken.example", "--timeout-ms", "5000"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	}()
+
+	loginURL := <-loginURLCh
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirectURI, err := url.Parse(parsed.Query().Get("redirect_uri"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := redirectURI.Query()
+	params.Set("state", parsed.Query().Get("state"))
+	redirectURI.RawQuery = params.Encode()
+
+	response, err := http.Get(redirectURI.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 callback, got %d", response.StatusCode)
+	}
+	if !strings.Contains(string(body), "no token was provided") {
+		t.Fatalf("expected diagnostic page, got %s", string(body))
+	}
+
+	cancel()
+	if err := <-errCh; err == nil {
+		t.Fatal("expected cancelled login")
 	}
 }
 
