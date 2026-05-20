@@ -4,7 +4,7 @@
 
 The Worker remains the source of truth for product behavior. Dedicated commands call stable API routes directly, while `commands`, `do`, and raw HTTP commands discover and invoke the server-owned `/api/client` catalog so new routes are usable before a dedicated command is added.
 
-The default help is intentionally catalog-first. It explains login, profiles, generic HTTP commands, and how to inspect `/api/client`; it must not try to duplicate the complete product operation list because that list is owned by the Worker and filtered by the current bearer session.
+The default help fetches `/api/client` once and renders the server-owned examples, shortcut families, and operation routes available to the selected bearer session. Authentication and generic transport flags stay local bootstrap behavior; the product command surface belongs to the Worker so API changes do not require a CLI release just to discover or invoke new operations.
 
 The profile file is intentionally compatible with the prior Node CLI:
 

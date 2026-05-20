@@ -27,6 +27,14 @@ type client struct {
 }
 
 func newClient(cmd command, log *logger) (*client, error) {
+	return newClientWithAuthRequirement(cmd, log, true)
+}
+
+func newCatalogClient(cmd command, log *logger) (*client, error) {
+	return newClientWithAuthRequirement(cmd, log, false)
+}
+
+func newClientWithAuthRequirement(cmd command, log *logger, requireToken bool) (*client, error) {
 	cfg, err := readConfig()
 	if err != nil {
 		return nil, err
@@ -43,7 +51,7 @@ func newClient(cmd command, log *logger) (*client, error) {
 		baseURL = defaultBaseURL
 	}
 	token := selectedBearerToken(cmd, prof)
-	if trim(token) == "" {
+	if requireToken && trim(token) == "" {
 		return nil, fmt.Errorf("bearer token is required. Run auth import-token, set CRAKEN_TOKEN, or pass --token/--bearer-token")
 	}
 	return &client{
@@ -104,7 +112,9 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 			request.Header.Add(key, value)
 		}
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	if trim(c.token) != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	if request.Header.Get("Accept") == "" {
 		request.Header.Set("Accept", "application/json")
 	}
