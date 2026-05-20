@@ -49,6 +49,14 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 			t.Fatalf("unexpected help path %s", r.URL.Path)
 		}
 		writeJSON(t, w, map[string]any{
+			"commands": []map[string]any{{
+				"command":     "craken custom run --name NAME",
+				"description": "Run the server-provided command",
+				"examples":    []string{"craken custom run --name demo"},
+				"group":       "Custom",
+				"id":          "custom.run",
+				"operationId": "custom.operation",
+			}},
 			"examples": []map[string]any{{
 				"command":     "craken do custom.operation --profile PROFILE",
 				"description": "Run the server-provided example",
@@ -77,8 +85,11 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 	}
 	help := stdout.String()
 	for _, expected := range []string{
-		"craken do custom.operation --profile PROFILE",
-		"custom run|inspect",
+		"Server commands:",
+		"Custom:",
+		"craken custom run --name NAME",
+		"Run the server-provided command",
+		"e.g. craken custom run --name demo",
 		"custom.operation\tPOST\t/api/custom\tRun a custom operation",
 		"craken do OPERATION_ID",
 	} {
@@ -90,12 +101,50 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 		t.Fatalf("expected anonymous catalog request, got auth %q", seenAuthorization)
 	}
 	for _, stale := range []string{
+		"Server-advertised shortcuts:",
+		"custom run|inspect",
 		"workspace list|get|create|delete",
 		"workspace|channel|dm|file|folder|wiki|agent|dream",
 	} {
 		if strings.Contains(help, stale) {
 			t.Fatalf("expected help not to hard-code operation list %q, got:\n%s", stale, help)
 		}
+	}
+}
+
+func TestCommandsTextRendersServerCommands(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected commands path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"commands": []map[string]any{{
+				"command":     "craken custom run --name NAME",
+				"description": "Run the server-provided command",
+				"group":       "Custom",
+				"id":          "custom.run",
+				"operationId": "custom.operation",
+			}},
+			"routes": []map[string]any{{
+				"auth":        "required",
+				"description": "Run a custom operation",
+				"id":          "custom.operation",
+				"method":      "POST",
+				"path":        "/api/custom",
+				"requestBody": "json",
+			}},
+			"schemaVersion": 1,
+		})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"commands", "--base-url", server.URL, "--token", "test-token", "--format", "text"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	expected := "Custom\tcustom.run\tcraken custom run --name NAME\tRun the server-provided command\n"
+	if stdout.String() != expected {
+		t.Fatalf("expected commands text %q, got %q", expected, stdout.String())
 	}
 }
 
