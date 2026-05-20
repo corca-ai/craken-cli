@@ -28,10 +28,20 @@ type route struct {
 
 type clientCatalog struct {
 	BuildID       string           `json:"buildId"`
+	Commands      []cliCommand     `json:"commands,omitempty"`
 	Examples      []commandExample `json:"examples,omitempty"`
 	Routes        []route          `json:"routes"`
 	SchemaVersion int              `json:"schemaVersion"`
 	Shortcuts     []shortcut       `json:"shortcuts,omitempty"`
+}
+
+type cliCommand struct {
+	Command     string   `json:"command"`
+	Description string   `json:"description"`
+	Examples    []string `json:"examples,omitempty"`
+	Group       string   `json:"group"`
+	ID          string   `json:"id"`
+	OperationID string   `json:"operationId,omitempty"`
 }
 
 type commandExample struct {
@@ -46,23 +56,26 @@ type shortcut struct {
 }
 
 func runCommands(ctx context.Context, client *client, cmd command, stdout io.Writer) error {
-	catalog, err := client.json(ctx, "GET", "/api/client", nil)
+	value, err := client.json(ctx, "GET", "/api/client", nil)
 	if err != nil {
 		return err
 	}
-	routes, err := routesFromCatalog(catalog)
+	catalog, err := catalogFromValue(value)
 	if err != nil {
 		return err
 	}
 	if cmd.string("format", "") == "text" {
-		for _, route := range routes {
-			if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", route.ID, route.Method, route.Path, route.Description); err != nil {
+		if len(catalog.Commands) > 0 {
+			return printCommandsText(stdout, catalog.Commands)
+		}
+		for _, route := range catalog.Routes {
+			if _, err := fmt.Fprintf(stdout, "Operation\t%s\tcraken do %s\t%s\n", route.ID, route.ID, route.Description); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	return printJSON(stdout, catalog)
+	return printJSON(stdout, value)
 }
 
 func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, stdin io.Reader) error {
@@ -164,6 +177,16 @@ func catalogFromValue(value any) (clientCatalog, error) {
 	for _, route := range catalog.Routes {
 		if route.ID == "" || route.Method == "" || route.Path == "" || route.Description == "" || route.Auth == "" || route.RequestBody == "" {
 			return clientCatalog{}, fmt.Errorf("invalid route in client command catalog")
+		}
+	}
+	for _, command := range catalog.Commands {
+		if trim(command.ID) == "" || trim(command.Group) == "" || trim(command.Command) == "" || trim(command.Description) == "" {
+			return clientCatalog{}, fmt.Errorf("invalid command in client command catalog")
+		}
+		for _, example := range command.Examples {
+			if trim(example) == "" {
+				return clientCatalog{}, fmt.Errorf("invalid command example in client command catalog")
+			}
 		}
 	}
 	for _, example := range catalog.Examples {

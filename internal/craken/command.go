@@ -208,24 +208,45 @@ Generic request options:
 		return err
 	}
 
-	if len(catalog.Examples) > 0 {
-		if _, err := fmt.Fprint(stdout, "\nServer examples:\n"); err != nil {
+	if len(catalog.Commands) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nServer commands:\n"); err != nil {
 			return err
 		}
-		for _, example := range catalog.Examples {
-			if _, err := fmt.Fprintf(stdout, "  %s\n      %s\n", example.Command, example.Description); err != nil {
+		for _, group := range groupedCommands(catalog.Commands) {
+			if _, err := fmt.Fprintf(stdout, "%s:\n", group.Name); err != nil {
 				return err
 			}
+			for _, command := range group.Commands {
+				if _, err := fmt.Fprintf(stdout, "  %s\n      %s\n", command.Command, command.Description); err != nil {
+					return err
+				}
+				for _, example := range command.Examples {
+					if _, err := fmt.Fprintf(stdout, "      e.g. %s\n", example); err != nil {
+						return err
+					}
+				}
+			}
 		}
-	}
-
-	if len(catalog.Shortcuts) > 0 {
-		if _, err := fmt.Fprint(stdout, "\nServer-advertised shortcuts:\n"); err != nil {
-			return err
-		}
-		for _, shortcut := range catalog.Shortcuts {
-			if _, err := fmt.Fprintf(stdout, "  %s %s\n      %s\n", shortcut.Resource, strings.Join(shortcut.Actions, "|"), shortcut.Description); err != nil {
+	} else {
+		if len(catalog.Examples) > 0 {
+			if _, err := fmt.Fprint(stdout, "\nServer examples:\n"); err != nil {
 				return err
+			}
+			for _, example := range catalog.Examples {
+				if _, err := fmt.Fprintf(stdout, "  %s\n      %s\n", example.Command, example.Description); err != nil {
+					return err
+				}
+			}
+		}
+
+		if len(catalog.Shortcuts) > 0 {
+			if _, err := fmt.Fprint(stdout, "\nServer-advertised shortcuts:\n"); err != nil {
+				return err
+			}
+			for _, shortcut := range catalog.Shortcuts {
+				if _, err := fmt.Fprintf(stdout, "  %s %s\n      %s\n", shortcut.Resource, strings.Join(shortcut.Actions, "|"), shortcut.Description); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -241,5 +262,38 @@ Generic request options:
 		}
 	}
 
+	return nil
+}
+
+type commandGroup struct {
+	Name     string
+	Commands []cliCommand
+}
+
+func groupedCommands(commands []cliCommand) []commandGroup {
+	groups := []commandGroup{}
+	indexes := map[string]int{}
+	for _, command := range commands {
+		name := command.Group
+		if name == "" {
+			name = "Commands"
+		}
+		index, ok := indexes[name]
+		if !ok {
+			index = len(groups)
+			indexes[name] = index
+			groups = append(groups, commandGroup{Name: name})
+		}
+		groups[index].Commands = append(groups[index].Commands, command)
+	}
+	return groups
+}
+
+func printCommandsText(stdout io.Writer, commands []cliCommand) error {
+	for _, command := range commands {
+		if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", command.Group, command.ID, command.Command, command.Description); err != nil {
+			return err
+		}
+	}
 	return nil
 }

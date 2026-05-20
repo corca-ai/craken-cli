@@ -2,9 +2,9 @@
 
 `craken` is a small Go CLI that mirrors the Craken product API surface. It keeps machine-local behavior in the binary: profile storage, device-code browser login polling, request formatting, file upload/download, and realtime WebSocket subscriptions.
 
-The Worker remains the source of truth for product behavior. Dedicated commands call stable API routes directly, while `commands`, `do`, and raw HTTP commands discover and invoke the server-owned `/api/client` catalog so new routes are usable before a dedicated command is added.
+The Worker remains the source of truth for product behavior. Dedicated commands call stable API routes directly, while `commands`, `do`, and raw HTTP commands discover and invoke the server-owned `/api/client` catalog so new routes and command syntax are usable before a CLI release is needed.
 
-The default help fetches `/api/client` once and renders the server-owned examples, shortcut families, and operation routes available to the selected bearer session. Authentication and generic transport flags stay local bootstrap behavior; the product command surface belongs to the Worker so API changes do not require a CLI release just to discover or invoke new operations.
+The default help fetches `/api/client` once and renders the server-owned command syntax, descriptions, examples, and operation routes available to the selected bearer session. Authentication and generic transport flags stay local bootstrap behavior; the product command surface belongs to the Worker so API changes do not require a CLI release just to discover or invoke new operations.
 
 The profile file is intentionally compatible with the prior Node CLI:
 
