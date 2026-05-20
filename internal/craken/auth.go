@@ -2,12 +2,9 @@ package craken
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -64,15 +61,11 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-	timeoutMS, err := numberOption(cmd, "timeout-ms", 120000)
+	timeoutMS, err := numberOption(cmd, "timeout-ms", 300000)
 	if err != nil {
 		return err
 	}
-	state, err := randomState()
-	if err != nil {
-		return err
-	}
-	result, err := receiveBrowserLogin(ctx, baseURL, state, time.Duration(timeoutMS)*time.Millisecond, boolOption(cmd, "no-open"), stderr)
+	result, err := receiveDeviceLogin(ctx, baseURL, time.Duration(timeoutMS)*time.Millisecond, boolOption(cmd, "no-open"), stderr)
 	if err != nil {
 		return err
 	}
@@ -91,114 +84,155 @@ type loginResult struct {
 	TokenType string
 }
 
-func receiveBrowserLogin(ctx context.Context, baseURL string, state string, timeout time.Duration, noOpen bool, stderr io.Writer) (loginResult, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+type deviceAuthorizationResponse struct {
+	DeviceCode              string `json:"deviceCode"`
+	ExpiresIn               int    `json:"expiresIn"`
+	Interval                int    `json:"interval"`
+	UserCode                string `json:"userCode"`
+	VerificationURI         string `json:"verificationUri"`
+	VerificationURIComplete string `json:"verificationUriComplete"`
+}
+
+type deviceTokenResponse struct {
+	Error     string `json:"error"`
+	Message   string `json:"message"`
+	Session   any    `json:"session"`
+	Token     string `json:"token"`
+	TokenType string `json:"tokenType"`
+}
+
+func receiveDeviceLogin(ctx context.Context, baseURL string, timeout time.Duration, noOpen bool, stderr io.Writer) (loginResult, error) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	authorization, err := startDeviceAuthorization(ctx, httpClient, baseURL)
 	if err != nil {
 		return loginResult{}, err
 	}
-	defer func() { _ = listener.Close() }()
-
-	resultCh := make(chan loginResult, 1)
-	errCh := make(chan error, 1)
-	server := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/callback" {
-				http.NotFound(w, r)
-				return
-			}
-			if r.Method != http.MethodPost && r.Method != http.MethodGet {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			values, err := callbackValues(r)
-			if err != nil {
-				errCh <- err
-				http.Error(w, "Invalid callback", http.StatusBadRequest)
-				return
-			}
-			if values.Get("state") != state {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = fmt.Fprint(w, "<!doctype html><title>Craken CLI Login</title><p>Craken CLI callback reached, but it belongs to a different login attempt. Close old Craken CLI login tabs, return to the current authorization tab, and click Authorize CLI again while the terminal command is still running.</p>")
-				return
-			}
-			token := trim(values.Get("token"))
-			if token == "" {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = fmt.Fprint(w, "<!doctype html><title>Craken CLI Login</title><p>Craken CLI callback reached, but no token was provided. Return to the authorization tab and click Authorize CLI again while the terminal command is still running.</p>")
-				return
-			}
-			var session any
-			if raw := values.Get("session"); raw != "" {
-				_ = json.Unmarshal([]byte(raw), &session)
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = fmt.Fprint(w, "<!doctype html><title>Craken CLI Login</title><p>Craken CLI login complete. You can close this tab.</p>")
-			resultCh <- loginResult{Session: session, Token: token, TokenType: firstNonEmpty(values.Get("tokenType"), "Bearer")}
-		}),
+	loginURL := firstNonEmpty(authorization.VerificationURIComplete, authorization.VerificationURI)
+	if loginURL == "" {
+		return loginResult{}, fmt.Errorf("device login response did not include a verification URL")
 	}
-	go func() {
-		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
-			errCh <- serveErr
-		}
-	}()
-	defer func() { _ = server.Shutdown(context.Background()) }()
-
-	loginURL, err := buildLoginURL(baseURL, listener.Addr().(*net.TCPAddr).Port, state)
-	if err != nil {
-		return loginResult{}, err
-	}
-	if _, err := fmt.Fprintf(stderr, "Open this URL to log in:\n%s\n", loginURL); err != nil {
+	if _, err := fmt.Fprintf(stderr, "Open this URL to log in:\n%s\n\nCode: %s\nWaiting for authorization...\n", loginURL, authorization.UserCode); err != nil {
 		return loginResult{}, err
 	}
 	if !noOpen {
 		openBrowser(loginURL)
 	}
 
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return loginResult{}, ctx.Err()
-	case <-timer.C:
-		return loginResult{}, fmt.Errorf("browser login timed out after %dms", timeout.Milliseconds())
-	case err := <-errCh:
-		return loginResult{}, err
-	case result := <-resultCh:
-		return result, nil
+	timeout = shorterPositiveDuration(timeout, time.Duration(authorization.ExpiresIn)*time.Second)
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	pollInterval := time.Duration(maxInt(authorization.Interval, 1)) * time.Second
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		result, pending, err := pollDeviceToken(ctx, httpClient, baseURL, authorization.DeviceCode)
+		if err != nil {
+			return loginResult{}, err
+		}
+		if !pending {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return loginResult{}, ctx.Err()
+		case <-deadline.C:
+			return loginResult{}, fmt.Errorf("browser login timed out after %dms", timeout.Milliseconds())
+		case <-ticker.C:
+		}
 	}
 }
 
-func callbackValues(r *http.Request) (url.Values, error) {
-	if r.Method == http.MethodGet {
-		return r.URL.Query(), nil
+func startDeviceAuthorization(ctx context.Context, httpClient *http.Client, baseURL string) (deviceAuthorizationResponse, error) {
+	var authorization deviceAuthorizationResponse
+	status, raw, err := postPublicJSON(ctx, httpClient, baseURL, "/api/client/device-authorizations", map[string]any{}, &authorization)
+	if err != nil {
+		return deviceAuthorizationResponse{}, err
 	}
-	if err := r.ParseForm(); err != nil {
-		return nil, err
+	if status < 200 || status >= 300 {
+		return deviceAuthorizationResponse{}, fmt.Errorf("device login authorization failed with %d: %s", status, string(raw))
 	}
-	return r.PostForm, nil
+	if trim(authorization.DeviceCode) == "" || trim(authorization.UserCode) == "" {
+		return deviceAuthorizationResponse{}, fmt.Errorf("device login authorization response was incomplete")
+	}
+	return authorization, nil
 }
 
-func buildLoginURL(baseURL string, port int, state string) (string, error) {
+func pollDeviceToken(ctx context.Context, httpClient *http.Client, baseURL string, deviceCode string) (loginResult, bool, error) {
+	var token deviceTokenResponse
+	status, raw, err := postPublicJSON(ctx, httpClient, baseURL, "/api/client/device-token", map[string]string{"deviceCode": deviceCode}, &token)
+	if err != nil {
+		return loginResult{}, false, err
+	}
+	if status == http.StatusTooEarly || token.Error == "authorization_pending" {
+		return loginResult{}, true, nil
+	}
+	if status < 200 || status >= 300 {
+		if token.Message != "" {
+			return loginResult{}, false, fmt.Errorf("device login failed: %s", token.Message)
+		}
+		return loginResult{}, false, fmt.Errorf("device login failed with %d: %s", status, string(raw))
+	}
+	if trim(token.Token) == "" {
+		return loginResult{}, false, fmt.Errorf("device login token response did not include a token")
+	}
+	return loginResult{Session: token.Session, Token: token.Token, TokenType: firstNonEmpty(token.TokenType, "Bearer")}, false, nil
+}
+
+func postPublicJSON(ctx context.Context, httpClient *http.Client, baseURL string, path string, body any, target any) (int, []byte, error) {
+	endpoint, err := resolvePublicEndpoint(baseURL, path)
+	if err != nil {
+		return 0, nil, err
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return 0, nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytesReader(encoded))
+	if err != nil {
+		return 0, nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		return response.StatusCode, nil, err
+	}
+	if len(raw) > 0 && target != nil {
+		_ = json.Unmarshal(raw, target)
+	}
+	return response.StatusCode, raw, nil
+}
+
+func resolvePublicEndpoint(baseURL string, path string) (string, error) {
 	endpoint, err := url.Parse(baseURL)
 	if err != nil {
 		return "", err
 	}
-	login := endpoint.ResolveReference(&url.URL{Path: "/api/client/login"})
-	params := login.Query()
-	params.Set("redirect_uri", fmt.Sprintf("http://127.0.0.1:%d/callback", port))
-	params.Set("state", state)
-	login.RawQuery = params.Encode()
-	return login.String(), nil
+	return endpoint.ResolveReference(&url.URL{Path: path}).String(), nil
 }
 
-func randomState() (string, error) {
-	var bytes [24]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", err
+func shorterPositiveDuration(left time.Duration, right time.Duration) time.Duration {
+	if left <= 0 {
+		return right
 	}
-	return base64.RawURLEncoding.EncodeToString(bytes[:]), nil
+	if right <= 0 || left < right {
+		return left
+	}
+	return right
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func openBrowserDefault(target string) {

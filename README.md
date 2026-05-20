@@ -23,7 +23,7 @@ go build -o bin/craken ./cmd/craken
 craken auth login --profile ak
 ```
 
-The login command opens the normal Craken browser session flow, asks for CLI authorization, and stores a bearer credential in the selected profile.
+The login command prints a short code and opens the normal Craken browser session flow. Confirm the same code in the browser; the waiting CLI polls the server and stores the approved bearer credential in the selected profile. Use `--no-open` when the browser is on another machine, such as an SSH session.
 
 ## Usage
 
