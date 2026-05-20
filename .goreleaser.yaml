@@ -1,0 +1,51 @@
+version: 2
+
+builds:
+  - id: craken
+    main: ./cmd/craken
+    binary: craken
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      craken_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  format: "{{ .SHA }}: {{ .Message }}{{ if .Logins }} ({{ .Logins | englishJoin }}){{ end }}"
+  filters:
+    exclude:
+      - '^Merge '
+
+release:
+  github:
+    owner: corca-ai
+    name: craken-cli
+
+brews:
+  - repository:
+      owner: corca-ai
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/corca-ai/craken-cli
+    description: Browserless Craken product CLI
+    license: MIT
+    install: |
+      bin.install "craken"
+    test: |
+      system bin/"craken", "version"
