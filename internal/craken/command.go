@@ -325,6 +325,11 @@ func localCommandHelpOptions(commandID string) []string {
 			"--after MESSAGE_ID        Read newer messages after a response newestCursor.",
 			"--around MESSAGE_ID       Read a page ending at a known message id.",
 		}
+	case "channel.wait":
+		return []string{
+			"--after MESSAGE_ID        Wait after a previous message id or newestCursor. Omit to wait after the current newest message.",
+			"--timeout-ms MS          Server-side wait timeout. Defaults to 30000 and caps at 60000.",
+		}
 	case "wiki.recent":
 		return []string{"--limit N                 Limit recent wiki changes."}
 	case "workspace.activity":

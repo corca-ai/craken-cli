@@ -31,6 +31,7 @@ The login command prints a short code and opens the normal Craken browser sessio
 craken workspace list
 craken workspace create --name test0
 craken channel send --workspace test0 --channel general hello
+craken channel wait --workspace test0 --channel general --after MESSAGE_ID --timeout-ms 60000
 craken dm send --workspace test0 --target orca hello
 craken wiki save --workspace test0 --existing-title Home --content-file ./home.md --base-version 12
 craken workspace tail --workspace test0 --pretty
