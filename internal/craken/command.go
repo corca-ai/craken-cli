@@ -2,6 +2,7 @@ package craken
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -114,6 +115,10 @@ func parseCommand(args []string) (command, error) {
 		}
 	}
 	if cmd.Action == "" {
+		if cmd.Help {
+			cmd.Action = "help"
+			return cmd, nil
+		}
 		if cmd.Resource == "workspace" {
 			cmd.Action = "list"
 		} else {
@@ -176,7 +181,162 @@ func runHelp(ctx context.Context, cmd command, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if command, route := focusedHelpTarget(cmd, catalog); command != nil {
+		return printFocusedCommandHelp(stdout, *command, route)
+	}
 	return printCatalogHelp(stdout, catalog)
+}
+
+func focusedHelpTarget(cmd command, catalog clientCatalog) (*cliCommand, *route) {
+	if cmd.Resource == "" || cmd.Action == "" || cmd.Action == "help" {
+		return nil, nil
+	}
+	id := cmd.Resource + "." + cmd.Action
+	for i := range catalog.Commands {
+		if catalog.Commands[i].ID == id {
+			return &catalog.Commands[i], routeByID(catalog.Routes, catalog.Commands[i].OperationID)
+		}
+	}
+	return nil, nil
+}
+
+func routeByID(routes []route, id string) *route {
+	if id == "" {
+		return nil
+	}
+	for i := range routes {
+		if routes[i].ID == id {
+			return &routes[i]
+		}
+	}
+	return nil
+}
+
+func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route) error {
+	if _, err := fmt.Fprintf(stdout, "Usage:\n  %s\n\n%s\n", command.Command, command.Description); err != nil {
+		return err
+	}
+	if len(command.Examples) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nExamples:\n"); err != nil {
+			return err
+		}
+		for _, example := range command.Examples {
+			if _, err := fmt.Fprintf(stdout, "  e.g. %s\n", example); err != nil {
+				return err
+			}
+		}
+	}
+	if options := localCommandHelpOptions(command.ID); len(options) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nOptions:\n"); err != nil {
+			return err
+		}
+		for _, option := range options {
+			if _, err := fmt.Fprintf(stdout, "  %s\n", option); err != nil {
+				return err
+			}
+		}
+	}
+	if route == nil {
+		return nil
+	}
+	if _, err := fmt.Fprintf(stdout, "\nOperation:\n  %s\t%s\t%s\n", route.ID, route.Method, route.Path); err != nil {
+		return err
+	}
+	if route.Description != "" && route.Description != command.Description {
+		if _, err := fmt.Fprintf(stdout, "  %s\n", route.Description); err != nil {
+			return err
+		}
+	}
+	for _, group := range []struct {
+		title  string
+		fields []catalogField
+	}{
+		{title: "Path parameters", fields: route.PathParameters},
+		{title: "Query parameters", fields: route.QueryParameters},
+		{title: "Body fields", fields: route.BodyFields},
+	} {
+		if err := printCatalogFieldGroup(stdout, group.title, group.fields); err != nil {
+			return err
+		}
+	}
+	if route.ResponseExample != nil {
+		if err := printResponseExample(stdout, route.ResponseExample); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printCatalogFieldGroup(stdout io.Writer, title string, fields []catalogField) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(stdout, "\n%s:\n", title); err != nil {
+		return err
+	}
+	for _, field := range fields {
+		detail := fieldDetail(field)
+		if detail == "" {
+			if _, err := fmt.Fprintf(stdout, "  --%s\n", kebabCase(field.Name)); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(stdout, "  --%s  %s\n", kebabCase(field.Name), detail); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fieldDetail(field catalogField) string {
+	parts := []string{}
+	if field.Type != "" {
+		parts = append(parts, field.Type)
+	}
+	if len(field.Values) > 0 {
+		parts = append(parts, strings.Join(field.Values, "|"))
+	}
+	if field.Required {
+		parts = append(parts, "required")
+	}
+	if field.Description != "" {
+		parts = append(parts, field.Description)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func printResponseExample(stdout io.Writer, value any) error {
+	bytes, err := json.MarshalIndent(value, "  ", "\t")
+	if err != nil {
+		return err
+	}
+	text := strings.ReplaceAll(string(bytes), "\n", "\n  ")
+	_, err = fmt.Fprintf(stdout, "\nResponse example:\n  %s\n", text)
+	return err
+}
+
+func localCommandHelpOptions(commandID string) []string {
+	switch commandID {
+	case "channel.messages", "dm.messages", "dm.list":
+		return []string{
+			"--position latest|start   Read the latest page or the beginning of the conversation.",
+			"--before MESSAGE_ID       Read older messages before a response oldestCursor.",
+			"--after MESSAGE_ID        Read newer messages after a response newestCursor.",
+			"--around MESSAGE_ID       Read a page ending at a known message id.",
+		}
+	case "wiki.recent":
+		return []string{"--limit N                 Limit recent wiki changes."}
+	case "workspace.activity":
+		return []string{
+			"--anchor-json JSON        Activity anchor JSON.",
+			"--before-sequence N       Read activity before a sequence cursor.",
+			"--limit N                 Limit returned activity rows.",
+			"--surfaces LIST           Comma-separated activity surfaces.",
+		}
+	default:
+		return nil
+	}
 }
 
 func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
