@@ -325,7 +325,7 @@ func localSenderBody(cmd command, body string) map[string]any {
 
 func messagePageQuery(cmd command) string {
 	params := url.Values{}
-	for _, key := range []string{"position", "before", "after", "around"} {
+	for _, key := range []string{"position", "before", "after", "around", "limit"} {
 		if value := cmd.string(key, ""); value != "" {
 			params.Set(key, value)
 		}

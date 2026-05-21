@@ -202,6 +202,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 		"--before MESSAGE_ID",
 		"--around MESSAGE_ID",
 		"--position latest|start",
+		"--limit N",
 		"Query parameters:",
 		"Response example:",
 		"newestCursor",
@@ -591,6 +592,107 @@ func TestChannelSendResolvesWorkspaceChannelAndSender(t *testing.T) {
 	}
 	if posted["body"] != "hello there" || posted["senderEmail"] != "sender@example.com" {
 		t.Fatalf("unexpected posted body %#v", posted)
+	}
+}
+
+func TestMessageCommandsSendLimitQuery(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	seenChannel := false
+	seenDM := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{
+				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+				"members":  []map[string]any{{"id": "participant-id", "kind": "agent", "name": "orca"}},
+			})
+		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
+			seenChannel = true
+			if got := r.URL.Query().Get("after"); got != "message-1" {
+				t.Fatalf("unexpected channel after query %q", got)
+			}
+			if got := r.URL.Query().Get("limit"); got != "10" {
+				t.Fatalf("unexpected channel limit query %q", got)
+			}
+			writeJSON(t, w, map[string]any{"messages": []any{}})
+		case "GET /api/workspaces/workspace-id/direct-messages/participant-id/messages":
+			seenDM = true
+			if got := r.URL.Query().Get("limit"); got != "10" {
+				t.Fatalf("unexpected dm limit query %q", got)
+			}
+			writeJSON(t, w, map[string]any{"messages": []any{}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"channel", "messages",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--channel", "general",
+		"--after", "message-1",
+		"--limit", "10",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), "dev", []string{
+		"dm", "messages",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--target", "orca",
+		"--limit", "10",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !seenChannel || !seenDM {
+		t.Fatalf("expected both message routes, saw channel=%t dm=%t", seenChannel, seenDM)
+	}
+}
+
+func TestMessageLimitServiceValidationIsPreserved(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{
+				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+				"members":  []map[string]any{},
+			})
+		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
+			if got := r.URL.Query().Get("limit"); got != "0" {
+				t.Fatalf("unexpected limit query %q", got)
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(t, w, map[string]any{"error": "limit must be a positive integer"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), "dev", []string{
+		"channel", "messages",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--channel", "general",
+		"--limit", "0",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected service validation error")
+	}
+	if message := err.Error(); !strings.Contains(message, "failed with 400") || !strings.Contains(message, "limit must be a positive integer") {
+		t.Fatalf("expected service validation message, got %q", message)
 	}
 }
 
