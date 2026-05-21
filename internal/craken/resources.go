@@ -97,7 +97,7 @@ func runChannel(ctx context.Context, client *client, cmd command, stdout io.Writ
 			return err
 		}
 		return printClientJSON(ctx, client, stdout, "POST", workspacePath(workspaceID)+"/channels", map[string]any{"name": name, "purpose": cmd.string("purpose", "")})
-	case "update", "delete", "join", "leave", "add-member", "messages", "send":
+	case "update", "delete", "join", "leave", "add-member", "messages", "wait", "send":
 	default:
 		return fmt.Errorf("unknown channel action: %s", cmd.Action)
 	}
@@ -126,6 +126,12 @@ func runChannel(ctx context.Context, client *client, cmd command, stdout io.Writ
 		return printClientJSON(ctx, client, stdout, "POST", workspacePath(workspaceID)+"/channels/"+url.PathEscape(channelID)+"/members", map[string]any{"participantId": participantID})
 	case "messages":
 		return printClientJSON(ctx, client, stdout, "GET", workspacePath(workspaceID)+"/channels/"+url.PathEscape(channelID)+"/messages"+messagePageQuery(cmd), nil)
+	case "wait":
+		query, err := channelWaitQuery(cmd)
+		if err != nil {
+			return err
+		}
+		return printClientJSON(ctx, client, stdout, "GET", workspacePath(workspaceID)+"/channels/"+url.PathEscape(channelID)+"/messages/wait"+query, nil)
 	case "send":
 		body, err := messageBody(cmd)
 		if err != nil {
@@ -328,6 +334,23 @@ func messagePageQuery(cmd command) string {
 		return ""
 	}
 	return "?" + params.Encode()
+}
+
+func channelWaitQuery(cmd command) (string, error) {
+	params := url.Values{}
+	if value := cmd.string("after", ""); value != "" {
+		params.Set("after", value)
+	}
+	if value := cmd.string("timeout-ms", ""); value != "" {
+		if _, err := numberOption(cmd, "timeout-ms", 0); err != nil {
+			return "", err
+		}
+		params.Set("timeoutMs", value)
+	}
+	if len(params) == 0 {
+		return "", nil
+	}
+	return "?" + params.Encode(), nil
 }
 
 func methodUpper(value string) string {

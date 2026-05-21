@@ -235,6 +235,53 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestFocusedHelpShowsChannelWaitOptions(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"commands": []map[string]any{{
+				"command":     "craken channel wait --workspace WORKSPACE --channel CHANNEL [--after MESSAGE_ID] [--timeout-ms MS]",
+				"description": "Wait for the next channel message after a cursor.",
+				"examples":    []string{"craken channel wait --workspace W --channel C --after MESSAGE_ID --timeout-ms 60000"},
+				"group":       "Channel",
+				"id":          "channel.wait",
+				"operationId": "channels.messages.wait",
+			}},
+			"routes": []map[string]any{{
+				"auth":        "required",
+				"description": "Wait up to timeoutMs for the next channel message. Returns { message, timedOut }.",
+				"id":          "channels.messages.wait",
+				"method":      "GET",
+				"path":        "/api/workspaces/{workspaceId}/channels/{channelId}/messages/wait",
+				"requestBody": "none",
+			}},
+			"schemaVersion": 1,
+		})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"channel", "wait", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	help := stdout.String()
+	for _, expected := range []string{
+		"craken channel wait --workspace WORKSPACE --channel CHANNEL",
+		"--after MESSAGE_ID",
+		"--timeout-ms MS",
+		"channels.messages.wait\tGET\t/api/workspaces/{workspaceId}/channels/{channelId}/messages/wait",
+		"e.g. craken channel wait --workspace W --channel C --after MESSAGE_ID --timeout-ms 60000",
+	} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("expected focused channel wait help to contain %q, got:\n%s", expected, help)
+		}
+	}
+}
+
 func TestCommandsTextRendersServerCommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/client" {
@@ -544,6 +591,56 @@ func TestChannelSendResolvesWorkspaceChannelAndSender(t *testing.T) {
 	}
 	if posted["body"] != "hello there" || posted["senderEmail"] != "sender@example.com" {
 		t.Fatalf("unexpected posted body %#v", posted)
+	}
+}
+
+func TestChannelWaitResolvesWorkspaceChannelAndPrintsWaitResponse(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{
+				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+				"members":  []map[string]any{},
+			})
+		case "GET /api/workspaces/workspace-id/channels/channel-id/messages/wait":
+			if got := r.URL.Query().Get("after"); got != "message-1" {
+				t.Fatalf("unexpected after query %q", got)
+			}
+			if got := r.URL.Query().Get("timeoutMs"); got != "60000" {
+				t.Fatalf("unexpected timeoutMs query %q", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"message":  map[string]any{"body": "ready", "id": "message-2"},
+				"timedOut": false,
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), "dev", []string{
+		"channel", "wait",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--channel", "general",
+		"--after", "message-1",
+		"--timeout-ms", "60000",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{`"body": "ready"`, `"timedOut": false`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected output to contain %q, got:\n%s", expected, output)
+		}
 	}
 }
 
