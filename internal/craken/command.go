@@ -324,6 +324,7 @@ func localCommandHelpOptions(commandID string) []string {
 			"--before MESSAGE_ID       Read older messages before a response oldestCursor.",
 			"--after MESSAGE_ID        Read newer messages after a response newestCursor.",
 			"--around MESSAGE_ID       Read a page ending at a known message id.",
+			"--limit N                 Request a smaller message page from the service.",
 		}
 	case "channel.wait":
 		return []string{

@@ -8,6 +8,8 @@ Wiki saves follow the service's optimistic concurrency contract. Creating a miss
 
 The default help fetches `/api/client` once and renders the server-owned command syntax, descriptions, examples, and operation routes available to the selected bearer session. Operation help such as `craken channel messages --help` focuses on the matching server command when it is present, then augments it with local option knowledge and any route metadata the catalog exposes. Authentication and generic transport flags stay local bootstrap behavior; the product command surface belongs to the Worker so API changes do not require a CLI release just to discover or invoke new operations.
 
+Message page commands pass cursor options and `--limit` through to the Worker so service-side validation, clamping, and cursor semantics remain the source of truth.
+
 The profile file is intentionally compatible with the prior Node CLI:
 
 ```text
