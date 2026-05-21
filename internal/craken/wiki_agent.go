@@ -23,7 +23,7 @@ func runWiki(ctx context.Context, client *client, cmd command, stdout io.Writer)
 		if limit := cmd.string("limit", ""); limit != "" {
 			path += "?limit=" + url.QueryEscape(limit)
 		}
-		return printClientJSON(ctx, client, stdout, "GET", path, nil)
+		return printClientCommandOutput(ctx, client, stdout, cmd, outputWikiRecent, path)
 	case "get":
 		title, err := cmd.required("title", "page")
 		if err != nil {
@@ -71,7 +71,7 @@ func runWiki(ctx context.Context, client *client, cmd command, stdout io.Writer)
 		if err != nil {
 			return err
 		}
-		return printClientJSON(ctx, client, stdout, "GET", wikiPagePath(workspaceID, title)+"/versions", nil)
+		return printClientCommandOutput(ctx, client, stdout, cmd, outputWikiVersions, wikiPagePath(workspaceID, title)+"/versions")
 	case "version":
 		title, err := cmd.required("title", "page")
 		if err != nil {
@@ -81,7 +81,14 @@ func runWiki(ctx context.Context, client *client, cmd command, stdout io.Writer)
 		if err != nil {
 			return err
 		}
-		return printClientJSON(ctx, client, stdout, "GET", wikiPagePath(workspaceID, title)+"/versions/"+url.PathEscape(version), nil)
+		return printClientCommandOutput(
+			ctx,
+			client,
+			stdout,
+			cmd,
+			outputWikiVersion,
+			wikiPagePath(workspaceID, title)+"/versions/"+url.PathEscape(version),
+		)
 	case "diff":
 		title, err := cmd.required("title", "page")
 		if err != nil {

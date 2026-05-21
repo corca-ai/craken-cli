@@ -10,6 +10,8 @@ The default help fetches `/api/client` once and renders the server-owned command
 
 Message page commands pass cursor options and `--limit` through to the Worker so service-side validation, clamping, and cursor semantics remain the source of truth.
 
+Dedicated message and wiki-history reads can format service JSON locally. `--compact` emits stable tab-separated rows for shell loops, while `--fields` keeps JSON output but projects only the requested dotted paths so scripts can omit large fields such as profile pictures without changing the service response contract.
+
 The profile file is intentionally compatible with the prior Node CLI:
 
 ```text

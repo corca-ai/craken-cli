@@ -125,7 +125,14 @@ func runChannel(ctx context.Context, client *client, cmd command, stdout io.Writ
 		}
 		return printClientJSON(ctx, client, stdout, "POST", workspacePath(workspaceID)+"/channels/"+url.PathEscape(channelID)+"/members", map[string]any{"participantId": participantID})
 	case "messages":
-		return printClientJSON(ctx, client, stdout, "GET", workspacePath(workspaceID)+"/channels/"+url.PathEscape(channelID)+"/messages"+messagePageQuery(cmd), nil)
+		return printClientCommandOutput(
+			ctx,
+			client,
+			stdout,
+			cmd,
+			outputMessages,
+			workspacePath(workspaceID)+"/channels/"+url.PathEscape(channelID)+"/messages"+messagePageQuery(cmd),
+		)
 	case "wait":
 		query, err := channelWaitQuery(cmd)
 		if err != nil {
@@ -164,7 +171,7 @@ func runDM(ctx context.Context, client *client, cmd command, stdout io.Writer) e
 		}
 		return printClientJSON(ctx, client, stdout, "POST", path, localSenderBody(cmd, body))
 	case "messages", "list":
-		return printClientJSON(ctx, client, stdout, "GET", path+messagePageQuery(cmd), nil)
+		return printClientCommandOutput(ctx, client, stdout, cmd, outputMessages, path+messagePageQuery(cmd))
 	default:
 		return fmt.Errorf("unknown dm action: %s", cmd.Action)
 	}
