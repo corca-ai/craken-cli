@@ -203,6 +203,8 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 		"--around MESSAGE_ID",
 		"--position latest|start",
 		"--limit N",
+		"--compact",
+		"--fields LIST",
 		"Query parameters:",
 		"Response example:",
 		"newestCursor",
@@ -231,8 +233,8 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 	if err := Run(context.Background(), "dev", []string{"wiki", "recent", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if help := stdout.String(); !strings.Contains(help, "--limit N") {
-		t.Fatalf("expected focused wiki help to contain --limit N, got:\n%s", help)
+	if help := stdout.String(); !strings.Contains(help, "--limit N") || !strings.Contains(help, "--compact") || !strings.Contains(help, "--fields LIST") {
+		t.Fatalf("expected focused wiki help to contain output options, got:\n%s", help)
 	}
 }
 
@@ -653,6 +655,158 @@ func TestMessageCommandsSendLimitQuery(t *testing.T) {
 	}
 	if !seenChannel || !seenDM {
 		t.Fatalf("expected both message routes, saw channel=%t dm=%t", seenChannel, seenDM)
+	}
+}
+
+func TestChannelMessagesCompactOutputOmitsPictures(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	picture := strings.Repeat("picture-data", 100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{
+				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+				"members":  []map[string]any{},
+			})
+		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
+			writeJSON(t, w, map[string]any{
+				"messages": []map[string]any{{
+					"body":      "hello\tthere\nnext",
+					"createdAt": "2026-05-21T12:00:00.000Z",
+					"id":        "message-1",
+					"sender": map[string]any{
+						"id":      "user:ada",
+						"name":    "Ada",
+						"picture": picture,
+					},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"channel", "messages",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--channel", "general",
+		"--compact",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "2026-05-21T12:00:00.000Z\tAda\thello\\tthere\\nnext\n"; got != want {
+		t.Fatalf("unexpected compact output %q", got)
+	}
+	if strings.Contains(stdout.String(), "picture-data") {
+		t.Fatalf("compact output leaked picture data: %s", stdout.String())
+	}
+}
+
+func TestDMMessagesFieldsProjectNestedJSON(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	picture := strings.Repeat("picture-data", 100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{
+				"channels": []map[string]any{},
+				"members":  []map[string]any{{"id": "participant-id", "kind": "agent", "name": "orca"}},
+			})
+		case "GET /api/workspaces/workspace-id/direct-messages/participant-id/messages":
+			writeJSON(t, w, map[string]any{
+				"messages": []map[string]any{{
+					"body":      "ready",
+					"createdAt": "2026-05-21T12:00:00.000Z",
+					"id":        "message-1",
+					"sender": map[string]any{
+						"id":      "agent:orca",
+						"name":    "Orca",
+						"picture": picture,
+					},
+				}},
+				"newestCursor": "message-1",
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"dm", "messages",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--target", "orca",
+		"--fields", "messages.id,messages.createdAt,messages.sender.name,messages.body",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout.String(), "picture-data") || strings.Contains(stdout.String(), "newestCursor") {
+		t.Fatalf("projected output leaked omitted fields: %s", stdout.String())
+	}
+
+	var projected map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &projected); err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := projected["messages"].([]any)
+	first, _ := messages[0].(map[string]any)
+	sender, _ := first["sender"].(map[string]any)
+	if first["id"] != "message-1" || first["createdAt"] != "2026-05-21T12:00:00.000Z" || first["body"] != "ready" || sender["name"] != "Orca" {
+		t.Fatalf("unexpected projected output %#v", projected)
+	}
+}
+
+func TestWikiRecentCompactOutputOmitsAuthorPictures(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	picture := strings.Repeat("picture-data", 100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id/wiki/recent-changes":
+			writeJSON(t, w, map[string]any{
+				"changes": []map[string]any{{
+					"createdAt":     "2026-05-21T12:00:00.000Z",
+					"createdBy":     map[string]any{"id": "user:ada", "name": "Ada", "picture": picture},
+					"page":          map[string]any{"title": "Home"},
+					"versionNumber": 3,
+				}},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"wiki", "recent",
+		"--token", "test-token",
+		"--base-url", server.URL,
+		"--workspace", "test0",
+		"--compact",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "2026-05-21T12:00:00.000Z\tAda\tHome\t3\n"; got != want {
+		t.Fatalf("unexpected compact wiki output %q", got)
+	}
+	if strings.Contains(stdout.String(), "picture-data") {
+		t.Fatalf("compact wiki output leaked picture data: %s", stdout.String())
 	}
 }
 

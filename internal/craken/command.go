@@ -325,6 +325,8 @@ func localCommandHelpOptions(commandID string) []string {
 			"--after MESSAGE_ID        Read newer messages after a response newestCursor.",
 			"--around MESSAGE_ID       Read a page ending at a known message id.",
 			"--limit N                 Request a smaller message page from the service.",
+			"--compact                 Print createdAt, sender, and body as tab-separated text.",
+			"--fields LIST             Print JSON projected to comma-separated dotted fields.",
 		}
 	case "channel.wait":
 		return []string{
@@ -332,7 +334,16 @@ func localCommandHelpOptions(commandID string) []string {
 			"--timeout-ms MS          Server-side wait timeout. Defaults to 30000 and caps at 60000.",
 		}
 	case "wiki.recent":
-		return []string{"--limit N                 Limit recent wiki changes."}
+		return []string{
+			"--limit N                 Limit recent wiki changes.",
+			"--compact                 Print createdAt, author, page, and version as tab-separated text.",
+			"--fields LIST             Print JSON projected to comma-separated dotted fields.",
+		}
+	case "wiki.versions", "wiki.version":
+		return []string{
+			"--compact                 Print createdAt, author, and version as tab-separated text.",
+			"--fields LIST             Print JSON projected to comma-separated dotted fields.",
+		}
 	case "workspace.activity":
 		return []string{
 			"--anchor-json JSON        Activity anchor JSON.",
