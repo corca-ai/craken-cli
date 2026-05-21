@@ -35,14 +35,25 @@ func runWiki(ctx context.Context, client *client, cmd command, stdout io.Writer)
 		if err != nil {
 			return err
 		}
+		baseVersionNumber, err := positiveNumberOption(cmd, "base-version")
+		if err != nil {
+			return err
+		}
 		if existing := cmd.string("existing-title", ""); existing != "" {
-			return printClientJSON(ctx, client, stdout, "PATCH", wikiPagePath(workspaceID, existing), compact(map[string]any{"content": content, "title": cmd.string("title", existing)}))
+			return printClientJSON(
+				ctx,
+				client,
+				stdout,
+				"PATCH",
+				wikiPagePath(workspaceID, existing),
+				wikiSaveBody(content, cmd.string("title", existing), baseVersionNumber),
+			)
 		}
 		title, err := cmd.required("title")
 		if err != nil {
 			return err
 		}
-		return printClientJSON(ctx, client, stdout, "POST", workspacePath(workspaceID)+"/wiki/pages", map[string]any{"content": content, "title": title})
+		return printClientJSON(ctx, client, stdout, "POST", workspacePath(workspaceID)+"/wiki/pages", wikiSaveBody(content, title, baseVersionNumber))
 	case "delete":
 		title, err := cmd.required("title", "page")
 		if err != nil {
@@ -87,6 +98,14 @@ func runWiki(ctx context.Context, client *client, cmd command, stdout io.Writer)
 	default:
 		return fmt.Errorf("unknown wiki action: %s", cmd.Action)
 	}
+}
+
+func wikiSaveBody(content string, title string, baseVersionNumber *int) map[string]any {
+	body := map[string]any{"content": content, "title": title}
+	if baseVersionNumber != nil {
+		body["baseVersionNumber"] = *baseVersionNumber
+	}
+	return body
 }
 
 func runAgent(ctx context.Context, client *client, cmd command, stdout io.Writer) error {
