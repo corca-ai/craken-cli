@@ -560,12 +560,12 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "POST /api/workspaces/workspace-id/wiki/pages":
+		case "PATCH /api/workspaces/workspace-id/wiki/pages/Home":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["title"] != "Home" || body["content"] != "# Home\n" {
+			if body["title"] != "Home" || body["content"] != "# Home\n" || body["baseVersionNumber"] != float64(12) {
 				t.Fatalf("unexpected wiki body %#v", body)
 			}
 			writeJSON(t, w, map[string]any{"page": body})
@@ -584,7 +584,7 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--title", "Home", "--content-file", contentPath}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--existing-title", "Home", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,6 +594,38 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Fatalf("unexpected request count %d: %#v", len(seen), seen)
+	}
+}
+
+func TestWikiSaveReportsBaseVersionConflict(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "PATCH /api/workspaces/workspace-id/wiki/pages/Home":
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(t, w, map[string]any{
+				"conflict": map[string]any{
+					"currentVersionNumber":      13,
+					"receivedBaseVersionNumber": 12,
+					"reason":                    "stale_base_version",
+				},
+				"error": "Wiki page update for \"Home\" conflicted: baseVersionNumber 12 does not match current version 13.",
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--existing-title", "Home", "--content", "stale", "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected stale wiki save to fail")
+	}
+	if message := err.Error(); !strings.Contains(message, "failed with 409") || !strings.Contains(message, "stale_base_version") {
+		t.Fatalf("expected 409 conflict details, got %q", message)
 	}
 }
 

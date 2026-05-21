@@ -120,6 +120,18 @@ func numberOption(cmd command, name string, fallback int) (int, error) {
 	return parsed, nil
 }
 
+func positiveNumberOption(cmd command, name string) (*int, error) {
+	value := cmd.string(name, "")
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 {
+		return nil, fmt.Errorf("expected positive integer, got %s", value)
+	}
+	return &parsed, nil
+}
+
 func boolOption(cmd command, name string) bool {
 	return cmd.Flags[name] || cmd.string(name, "") != ""
 }
