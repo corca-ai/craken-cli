@@ -16,14 +16,18 @@ import (
 var pathParamPattern = regexp.MustCompile(`\{([^}/]+)\}`)
 
 type route struct {
-	ID          string `json:"id"`
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	Description string `json:"description"`
-	Auth        string `json:"auth"`
-	Capability  string `json:"capability,omitempty"`
-	RequestBody string `json:"requestBody"`
-	Stream      string `json:"stream,omitempty"`
+	ID              string         `json:"id"`
+	Method          string         `json:"method"`
+	Path            string         `json:"path"`
+	Description     string         `json:"description"`
+	Auth            string         `json:"auth"`
+	Capability      string         `json:"capability,omitempty"`
+	PathParameters  []catalogField `json:"pathParameters,omitempty"`
+	QueryParameters []catalogField `json:"queryParameters,omitempty"`
+	BodyFields      []catalogField `json:"bodyFields,omitempty"`
+	RequestBody     string         `json:"requestBody"`
+	ResponseExample any            `json:"responseExample,omitempty"`
+	Stream          string         `json:"stream,omitempty"`
 }
 
 type clientCatalog struct {
@@ -53,6 +57,14 @@ type shortcut struct {
 	Actions     []string `json:"actions"`
 	Description string   `json:"description"`
 	Resource    string   `json:"resource"`
+}
+
+type catalogField struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Values      []string `json:"values,omitempty"`
 }
 
 func runCommands(ctx context.Context, client *client, cmd command, stdout io.Writer) error {

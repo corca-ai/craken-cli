@@ -6,7 +6,7 @@ The Worker remains the source of truth for product behavior. Dedicated commands 
 
 Wiki saves follow the service's optimistic concurrency contract. Creating a missing page can omit `--base-version`; updating an existing page should read the page first, edit against the returned `latestVersionNumber`, and pass that number as `--base-version`. A stale base version returns the server's 409 conflict payload so scripts can re-read, merge, and retry.
 
-The default help fetches `/api/client` once and renders the server-owned command syntax, descriptions, examples, and operation routes available to the selected bearer session. Authentication and generic transport flags stay local bootstrap behavior; the product command surface belongs to the Worker so API changes do not require a CLI release just to discover or invoke new operations.
+The default help fetches `/api/client` once and renders the server-owned command syntax, descriptions, examples, and operation routes available to the selected bearer session. Operation help such as `craken channel messages --help` focuses on the matching server command when it is present, then augments it with local option knowledge and any route metadata the catalog exposes. Authentication and generic transport flags stay local bootstrap behavior; the product command surface belongs to the Worker so API changes do not require a CLI release just to discover or invoke new operations.
 
 The profile file is intentionally compatible with the prior Node CLI:
 

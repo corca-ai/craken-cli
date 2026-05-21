@@ -116,6 +116,125 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 	}
 }
 
+func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"commands": []map[string]any{
+				{
+					"command":     "craken channel messages --workspace WORKSPACE --channel CHANNEL [--after MESSAGE_ID] [--before MESSAGE_ID] [--around MESSAGE_ID] [--position latest|start]",
+					"description": "List channel messages with cursor pagination.",
+					"examples":    []string{"craken channel messages --workspace W --channel C --after MESSAGE_ID"},
+					"group":       "Channel",
+					"id":          "channel.messages",
+					"operationId": "channels.messages.list",
+				},
+				{
+					"command":     "craken workspace activity --workspace WORKSPACE [--limit N]",
+					"description": "Read workspace activity.",
+					"group":       "Workspace",
+					"id":          "workspace.activity",
+					"operationId": "workspaces.activity",
+				},
+				{
+					"command":     "craken wiki recent --workspace WORKSPACE",
+					"description": "List recent wiki changes.",
+					"group":       "Wiki",
+					"id":          "wiki.recent",
+					"operationId": "wiki.recent-changes",
+				},
+			},
+			"routes": []map[string]any{
+				{
+					"auth":        "required",
+					"description": "List channel messages. Response cursors are message ids.",
+					"id":          "channels.messages.list",
+					"method":      "GET",
+					"path":        "/api/workspaces/{workspaceId}/channels/{channelId}/messages",
+					"queryParameters": []map[string]any{
+						{"description": "Read newer messages after this message id.", "name": "after", "type": "string"},
+						{"description": "Read older messages before this message id.", "name": "before", "type": "string"},
+					},
+					"requestBody": "none",
+					"responseExample": map[string]any{
+						"messages":     []map[string]any{{"id": "message-1"}},
+						"newestCursor": "message-1",
+					},
+				},
+				{
+					"auth":        "required",
+					"description": "Read workspace activity.",
+					"id":          "workspaces.activity",
+					"method":      "GET",
+					"path":        "/api/workspaces/{workspaceId}/activity",
+					"requestBody": "none",
+					"responseExample": map[string]any{
+						"activities": []map[string]any{{"sequence": 1}},
+					},
+				},
+				{
+					"auth":        "required",
+					"description": "List wiki recent changes.",
+					"id":          "wiki.recent-changes",
+					"method":      "GET",
+					"path":        "/api/workspaces/{workspaceId}/wiki/recent-changes",
+					"requestBody": "none",
+				},
+			},
+			"schemaVersion": 1,
+		})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"channel", "messages", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	channelHelp := stdout.String()
+	for _, expected := range []string{
+		"Usage:",
+		"craken channel messages --workspace WORKSPACE --channel CHANNEL",
+		"--after MESSAGE_ID",
+		"--before MESSAGE_ID",
+		"--around MESSAGE_ID",
+		"--position latest|start",
+		"Query parameters:",
+		"Response example:",
+		"newestCursor",
+		"e.g.",
+	} {
+		if !strings.Contains(channelHelp, expected) {
+			t.Fatalf("expected focused channel help to contain %q, got:\n%s", expected, channelHelp)
+		}
+	}
+	if strings.Contains(channelHelp, "Server commands:") {
+		t.Fatalf("expected focused help, got global help:\n%s", channelHelp)
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), "dev", []string{"workspace", "activity", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceHelp := stdout.String()
+	for _, expected := range []string{"--anchor-json JSON", "--before-sequence N", "--surfaces LIST", "activities"} {
+		if !strings.Contains(workspaceHelp, expected) {
+			t.Fatalf("expected focused workspace help to contain %q, got:\n%s", expected, workspaceHelp)
+		}
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), "dev", []string{"wiki", "recent", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if help := stdout.String(); !strings.Contains(help, "--limit N") {
+		t.Fatalf("expected focused wiki help to contain --limit N, got:\n%s", help)
+	}
+}
+
 func TestCommandsTextRendersServerCommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/client" {
