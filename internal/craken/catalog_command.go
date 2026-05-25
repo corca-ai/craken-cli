@@ -30,7 +30,7 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 		plan.OperationID = serverCommand.OperationID
 	}
 	if plan.Transport == "" {
-		plan.Transport = "http"
+		plan.Transport = commandTransportHTTP
 	}
 	selectedRoute := routeByID(catalog.Routes, plan.OperationID)
 	if selectedRoute == nil {
@@ -41,13 +41,13 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 		return err
 	}
 	switch plan.Transport {
-	case "http":
+	case commandTransportHTTP:
 		return runCatalogHTTPCommand(ctx, client, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
-	case "download":
+	case commandTransportDownload:
 		return runCatalogDownloadCommand(ctx, client, *selectedRoute, cmd, requestPath, stdout)
-	case "multipart":
+	case commandTransportMultipart:
 		return runCatalogMultipartCommand(ctx, client, cmd, requestPath, stdout)
-	case "websocket":
+	case commandTransportWebSocket:
 		workspaceID := resolved["workspaceId"]
 		if workspaceID == "" {
 			return fmt.Errorf("websocket command requires workspaceId")
@@ -135,27 +135,27 @@ func catalogCommandPath(ctx context.Context, client *client, route route, plan c
 func inferredPathBinding(name string) commandBinding {
 	switch name {
 	case "workspaceId":
-		return commandBinding{Option: "workspace", Required: true, Resolver: "workspace", Source: "option"}
+		return commandBinding{Option: "workspace", Required: true, Resolver: commandBindingResolverWorkspace, Source: commandBindingSourceOption}
 	case "channelId":
-		return commandBinding{Option: "channel", Required: true, Resolver: "channel", Scope: "workspaceId", Source: "option"}
+		return commandBinding{Option: "channel", Required: true, Resolver: commandBindingResolverChannel, Scope: "workspaceId", Source: commandBindingSourceOption}
 	case "participantId":
-		return commandBinding{Aliases: []string{"participant"}, Option: "target", Required: true, Resolver: "participant", Scope: "workspaceId", Source: "option"}
+		return commandBinding{Aliases: []string{"participant"}, Option: "target", Required: true, Resolver: commandBindingResolverParticipant, Scope: "workspaceId", Source: commandBindingSourceOption}
 	case "pageTitle":
-		return commandBinding{Aliases: []string{"page"}, Option: "title", Required: true, Source: "option"}
+		return commandBinding{Aliases: []string{"page"}, Option: "title", Required: true, Source: commandBindingSourceOption}
 	case "fileId":
-		return commandBinding{Option: "file", Required: true, Source: "option"}
+		return commandBinding{Option: "file", Required: true, Source: commandBindingSourceOption}
 	case "folderId":
-		return commandBinding{Option: "folder", Required: true, Source: "option"}
+		return commandBinding{Option: "folder", Required: true, Source: commandBindingSourceOption}
 	case "jobId":
-		return commandBinding{Aliases: []string{"wake"}, Option: "job", Required: true, Source: "option"}
+		return commandBinding{Aliases: []string{"wake"}, Option: "job", Required: true, Source: commandBindingSourceOption}
 	case "wakeId":
-		return commandBinding{Option: "wake", Required: true, Source: "option"}
+		return commandBinding{Option: "wake", Required: true, Source: commandBindingSourceOption}
 	case "token":
-		return commandBinding{Aliases: []string{"token"}, Option: "invitation-token", Required: true, Source: "option"}
+		return commandBinding{Aliases: []string{"token"}, Option: "invitation-token", Required: true, Source: commandBindingSourceOption}
 	case "versionNumber":
-		return commandBinding{Aliases: []string{"version"}, Option: "version-number", Required: true, Source: "option"}
+		return commandBinding{Aliases: []string{"version"}, Option: "version-number", Required: true, Source: commandBindingSourceOption}
 	default:
-		return commandBinding{Option: kebabCase(name), Required: true, Source: "option"}
+		return commandBinding{Option: kebabCase(name), Required: true, Source: commandBindingSourceOption}
 	}
 }
 
@@ -171,7 +171,7 @@ func runCatalogHTTPCommand(
 	stdout io.Writer,
 	stdin io.Reader,
 ) error {
-	if plan.Output == "agent-job-watch" {
+	if plan.Output == commandExecutionOutputAgentJobWatch {
 		if optionText(cmd, []string{"job", "wake"}) == "" {
 			return fmt.Errorf("expected --job")
 		}
@@ -279,19 +279,19 @@ func runCatalogMultipartCommand(ctx context.Context, client *client, cmd command
 	return printJSON(stdout, parsed)
 }
 
-func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output string) error {
+func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output commandExecutionOutput) error {
 	switch output {
 	case "":
 		return printPayload(stdout, payload, cmd)
-	case "messages":
+	case commandExecutionOutputMessages:
 		return printCommandOutput(stdout, payload.Parsed, cmd, outputMessages)
-	case "wiki-recent":
+	case commandExecutionOutputWikiRecent:
 		return printCommandOutput(stdout, payload.Parsed, cmd, outputWikiRecent)
-	case "wiki-version":
+	case commandExecutionOutputWikiVersion:
 		return printCommandOutput(stdout, payload.Parsed, cmd, outputWikiVersion)
-	case "wiki-versions":
+	case commandExecutionOutputWikiVersions:
 		return printCommandOutput(stdout, payload.Parsed, cmd, outputWikiVersions)
-	case "json", "bytes":
+	case commandExecutionOutputJSON, commandExecutionOutputBytes:
 		return printPayload(stdout, payload, cmd)
 	default:
 		return fmt.Errorf("unsupported catalog command output: %s", output)

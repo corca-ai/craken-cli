@@ -54,20 +54,20 @@ type cliCommand struct {
 type commandExecution struct {
 	BodyFields  map[string]commandBinding `json:"bodyFields,omitempty"`
 	OperationID string                    `json:"operationId,omitempty"`
-	Output      string                    `json:"output,omitempty"`
+	Output      commandExecutionOutput    `json:"output,omitempty"`
 	PathParams  map[string]commandBinding `json:"pathParams,omitempty"`
 	QueryParams map[string]commandBinding `json:"queryParams,omitempty"`
-	Transport   string                    `json:"transport,omitempty"`
+	Transport   commandTransport          `json:"transport,omitempty"`
 	Variants    []commandExecutionVariant `json:"variants,omitempty"`
 }
 
 type commandExecutionVariant struct {
 	BodyFields  map[string]commandBinding `json:"bodyFields,omitempty"`
 	OperationID string                    `json:"operationId,omitempty"`
-	Output      string                    `json:"output,omitempty"`
+	Output      commandExecutionOutput    `json:"output,omitempty"`
 	PathParams  map[string]commandBinding `json:"pathParams,omitempty"`
 	QueryParams map[string]commandBinding `json:"queryParams,omitempty"`
-	Transport   string                    `json:"transport,omitempty"`
+	Transport   commandTransport          `json:"transport,omitempty"`
 	When        commandCondition          `json:"when,omitempty"`
 }
 
@@ -76,16 +76,16 @@ type commandCondition struct {
 }
 
 type commandBinding struct {
-	Aliases     []string `json:"aliases,omitempty"`
-	FileOption  string   `json:"fileOption,omitempty"`
-	Option      string   `json:"option,omitempty"`
-	Positionals string   `json:"positionals,omitempty"`
-	Required    bool     `json:"required,omitempty"`
-	Resolver    string   `json:"resolver,omitempty"`
-	Scope       string   `json:"scope,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	Type        string   `json:"type,omitempty"`
-	Value       any      `json:"value,omitempty"`
+	Aliases     []string                  `json:"aliases,omitempty"`
+	FileOption  string                    `json:"fileOption,omitempty"`
+	Option      string                    `json:"option,omitempty"`
+	Positionals commandBindingPositionals `json:"positionals,omitempty"`
+	Required    bool                      `json:"required,omitempty"`
+	Resolver    commandBindingResolver    `json:"resolver,omitempty"`
+	Scope       string                    `json:"scope,omitempty"`
+	Source      commandBindingSource      `json:"source,omitempty"`
+	Type        commandBindingValueType   `json:"type,omitempty"`
+	Value       any                       `json:"value,omitempty"`
 }
 
 type commandExample struct {

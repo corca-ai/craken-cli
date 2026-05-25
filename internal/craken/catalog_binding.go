@@ -62,15 +62,15 @@ func catalogBindingValue(
 	consumed map[string]bool,
 ) (any, bool, error) {
 	switch binding.Source {
-	case "literal":
+	case commandBindingSourceLiteral:
 		return binding.Value, true, nil
-	case "flag":
+	case commandBindingSourceFlag:
 		if binding.Option == "" {
 			return nil, false, nil
 		}
 		consumed[binding.Option] = true
 		return boolOption(cmd, binding.Option), true, nil
-	case "text":
+	case commandBindingSourceText:
 		value, ok, err := textBindingValue(cmd, binding)
 		if err != nil || !ok {
 			if binding.Required && !ok {
@@ -80,7 +80,7 @@ func catalogBindingValue(
 		}
 		resolvedValue, err := resolveBoundValue(ctx, client, binding, fmt.Sprint(value), resolved)
 		return resolvedValue, true, err
-	case "option", "":
+	case commandBindingSourceOption, "":
 		value, source, ok := bindingOptionValue(cmd, binding)
 		if !ok {
 			if binding.Required {
@@ -89,11 +89,11 @@ func catalogBindingValue(
 			return nil, false, nil
 		}
 		consumed[source] = true
-		if binding.Type == "json" {
+		if binding.Type == commandBindingValueTypeJSON {
 			parsed, err := jsonBindingValue(value, source)
 			return parsed, true, err
 		}
-		if binding.Type == "integer" {
+		if binding.Type == commandBindingValueTypeInteger {
 			parsed, err := strconv.Atoi(value)
 			if err != nil {
 				return nil, false, fmt.Errorf("expected integer for --%s, got %s", source, value)
@@ -141,7 +141,7 @@ func textBindingValue(cmd command, binding commandBinding) (string, bool, error)
 	if hasValue {
 		return value, true, nil
 	}
-	if binding.Positionals == "join" && len(cmd.Positionals) > 0 {
+	if binding.Positionals == commandBindingPositionalsJoin && len(cmd.Positionals) > 0 {
 		return strings.Join(cmd.Positionals, " "), true, nil
 	}
 	return "", false, nil
@@ -172,15 +172,15 @@ func resolveBoundValue(
 	switch binding.Resolver {
 	case "":
 		return value, nil
-	case "workspace":
+	case commandBindingResolverWorkspace:
 		return resolveWorkspaceID(ctx, client, value)
-	case "channel":
+	case commandBindingResolverChannel:
 		workspaceID := resolved[binding.Scope]
 		if workspaceID == "" {
 			return "", fmt.Errorf("resolver channel requires scope %s", binding.Scope)
 		}
 		return resolveChannelID(ctx, client, workspaceID, value)
-	case "participant", "agent":
+	case commandBindingResolverParticipant, commandBindingResolverAgent:
 		workspaceID := resolved[binding.Scope]
 		if workspaceID == "" {
 			return "", fmt.Errorf("resolver %s requires scope %s", binding.Resolver, binding.Scope)
@@ -189,7 +189,7 @@ func resolveBoundValue(
 		if err != nil {
 			return "", err
 		}
-		if binding.Resolver == "agent" {
+		if binding.Resolver == commandBindingResolverAgent {
 			if !strings.HasPrefix(participantID, "agent:") {
 				return "", fmt.Errorf("dream agent must resolve to an agent participant, got %s", participantID)
 			}
