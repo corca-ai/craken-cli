@@ -62,8 +62,8 @@ func newClientWithAuthRequirement(cmd command, log *logger, requireToken bool) (
 	}, nil
 }
 
-func (c *client) json(ctx context.Context, method string, path string, body any) (any, error) {
-	response, err := c.raw(ctx, method, path, requestSpec{JSONBody: body})
+func (c *client) json(ctx context.Context, path string) (any, error) {
+	response, err := c.raw(ctx, http.MethodGet, path, requestSpec{})
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (c *client) json(ctx context.Context, method string, path string, body any)
 		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s %s failed with %d: %s", method, path, response.StatusCode, string(text))
+		return nil, fmt.Errorf("GET %s failed with %d: %s", path, response.StatusCode, string(text))
 	}
 	return parsed, nil
 }

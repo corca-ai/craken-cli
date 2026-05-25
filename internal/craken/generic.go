@@ -22,7 +22,9 @@ type route struct {
 	Description     string         `json:"description"`
 	Auth            string         `json:"auth"`
 	Capability      string         `json:"capability,omitempty"`
+	PathParams      []catalogField `json:"pathParams,omitempty"`
 	PathParameters  []catalogField `json:"pathParameters,omitempty"`
+	QueryParams     []catalogField `json:"queryParams,omitempty"`
 	QueryParameters []catalogField `json:"queryParameters,omitempty"`
 	BodyFields      []catalogField `json:"bodyFields,omitempty"`
 	RequestBody     string         `json:"requestBody"`
@@ -40,12 +42,50 @@ type clientCatalog struct {
 }
 
 type cliCommand struct {
-	Command     string   `json:"command"`
-	Description string   `json:"description"`
-	Examples    []string `json:"examples,omitempty"`
-	Group       string   `json:"group"`
-	ID          string   `json:"id"`
-	OperationID string   `json:"operationId,omitempty"`
+	Command     string           `json:"command"`
+	Description string           `json:"description"`
+	Execution   commandExecution `json:"execution,omitempty"`
+	Examples    []string         `json:"examples,omitempty"`
+	Group       string           `json:"group"`
+	ID          string           `json:"id"`
+	OperationID string           `json:"operationId,omitempty"`
+}
+
+type commandExecution struct {
+	BodyFields  map[string]commandBinding `json:"bodyFields,omitempty"`
+	OperationID string                    `json:"operationId,omitempty"`
+	Output      string                    `json:"output,omitempty"`
+	PathParams  map[string]commandBinding `json:"pathParams,omitempty"`
+	QueryParams map[string]commandBinding `json:"queryParams,omitempty"`
+	Transport   string                    `json:"transport,omitempty"`
+	Variants    []commandExecutionVariant `json:"variants,omitempty"`
+}
+
+type commandExecutionVariant struct {
+	BodyFields  map[string]commandBinding `json:"bodyFields,omitempty"`
+	OperationID string                    `json:"operationId,omitempty"`
+	Output      string                    `json:"output,omitempty"`
+	PathParams  map[string]commandBinding `json:"pathParams,omitempty"`
+	QueryParams map[string]commandBinding `json:"queryParams,omitempty"`
+	Transport   string                    `json:"transport,omitempty"`
+	When        commandCondition          `json:"when,omitempty"`
+}
+
+type commandCondition struct {
+	Option string `json:"option,omitempty"`
+}
+
+type commandBinding struct {
+	Aliases     []string `json:"aliases,omitempty"`
+	FileOption  string   `json:"fileOption,omitempty"`
+	Option      string   `json:"option,omitempty"`
+	Positionals string   `json:"positionals,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Resolver    string   `json:"resolver,omitempty"`
+	Scope       string   `json:"scope,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	Value       any      `json:"value,omitempty"`
 }
 
 type commandExample struct {
@@ -68,7 +108,7 @@ type catalogField struct {
 }
 
 func runCommands(ctx context.Context, client *client, cmd command, stdout io.Writer) error {
-	value, err := client.json(ctx, "GET", "/api/client", nil)
+	value, err := client.json(ctx, "/api/client")
 	if err != nil {
 		return err
 	}
@@ -95,7 +135,7 @@ func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, s
 	if operationID == "" || operationID == "help" {
 		return fmt.Errorf("expected operation id")
 	}
-	catalog, err := client.json(ctx, "GET", "/api/client", nil)
+	catalog, err := client.json(ctx, "/api/client")
 	if err != nil {
 		return err
 	}
@@ -387,6 +427,7 @@ func requestValuesFromOptions(cmd command, consumed map[string]bool) map[string]
 		"accept": true, "base-url": true, "body-file": true, "body-json": true, "format": true,
 		"json": true, "json-file": true, "log-file": true, "profile": true, "save-token-profile": true,
 		"token": true, "bearer-token": true,
+		"compact": true, "fields": true, "output": true, "pretty": true,
 	}
 	values := map[string]any{}
 	for key, value := range cmd.Options {

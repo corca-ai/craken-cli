@@ -16,6 +16,9 @@ func TestImportTokenStoresReusableProfile(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		if got := r.Header.Get("Authorization"); got != "Bearer stored-token" {
 			t.Fatalf("unexpected auth header %q", got)
 		}
@@ -327,6 +330,9 @@ func TestWorkspaceAcceptUsesProfileBearerWhenTokenIsInvitationAlias(t *testing.T
 	var seenAuth string
 	var seenPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		seenAuth = r.Header.Get("Authorization")
 		seenPath = r.URL.Path
 		writeJSON(t, w, map[string]any{"ok": true})
@@ -561,6 +567,9 @@ func TestChannelSendResolvesWorkspaceChannelAndSender(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	var posted map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -603,6 +612,9 @@ func TestMessageCommandsSendLimitQuery(t *testing.T) {
 	seenChannel := false
 	seenDM := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -663,6 +675,9 @@ func TestChannelMessagesCompactOutputOmitsPictures(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	picture := strings.Repeat("picture-data", 100)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -714,6 +729,9 @@ func TestDMMessagesFieldsProjectNestedJSON(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	picture := strings.Repeat("picture-data", 100)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -774,6 +792,9 @@ func TestWikiRecentCompactOutputOmitsAuthorPictures(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	picture := strings.Repeat("picture-data", 100)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -814,6 +835,9 @@ func TestMessageLimitServiceValidationIsPreserved(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -854,6 +878,9 @@ func TestChannelWaitResolvesWorkspaceChannelAndPrintsWaitResponse(t *testing.T) 
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -909,6 +936,9 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	}
 	var seen []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		seen = append(seen, r.Method+" "+r.URL.Path)
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
@@ -954,6 +984,9 @@ func TestWikiSaveReportsBaseVersionConflict(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -990,6 +1023,9 @@ func TestFileUploadUsesMultipartAndFolderCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -1052,6 +1088,99 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func writeTestCatalog(t *testing.T, w http.ResponseWriter, r *http.Request) bool {
+	t.Helper()
+	if r.Method != http.MethodGet || r.URL.Path != "/api/client" {
+		return false
+	}
+	writeJSON(t, w, map[string]any{
+		"commands": []map[string]any{
+			testCommand("workspace.list", "workspaces.list", nil),
+			testCommand("workspace.accept", "workspace-invitations.accept", map[string]any{
+				"pathParams": map[string]any{"token": map[string]any{"source": "option", "option": "invitation-token", "aliases": []string{"token"}, "required": true}},
+			}),
+			testCommand("channel.send", "channels.messages.create", map[string]any{
+				"bodyFields": map[string]any{
+					"body":        map[string]any{"source": "text", "option": "body", "fileOption": "body-file", "positionals": "join", "required": true},
+					"senderEmail": map[string]any{"source": "option", "option": "sender-email", "aliases": []string{"sender"}},
+				},
+			}),
+			testCommand("channel.messages", "channels.messages.list", map[string]any{"output": "messages"}),
+			testCommand("channel.wait", "channels.messages.wait", map[string]any{
+				"queryParams": map[string]any{
+					"after":     map[string]any{"source": "option", "option": "after"},
+					"timeoutMs": map[string]any{"source": "option", "option": "timeout-ms", "type": "integer"},
+				},
+			}),
+			testCommand("dm.messages", "direct-messages.list", map[string]any{"output": "messages"}),
+			testCommand("wiki.recent", "wiki.recent-changes", map[string]any{"output": "wiki-recent"}),
+			testCommand("wiki.save", "wiki.pages.update", map[string]any{
+				"bodyFields": map[string]any{
+					"baseVersionNumber": map[string]any{"source": "option", "option": "base-version", "type": "integer"},
+					"content":           map[string]any{"source": "text", "option": "content", "fileOption": "content-file", "required": true},
+					"title":             map[string]any{"source": "option", "option": "title"},
+				},
+				"pathParams": map[string]any{"pageTitle": map[string]any{"source": "option", "option": "existing-title", "required": true}},
+			}),
+			testCommand("agent.plan-check", "sysop.agent-job-plan.progression", map[string]any{
+				"bodyFields": map[string]any{
+					"nextPlan":     map[string]any{"source": "option", "option": "next-json", "aliases": []string{"next-file"}, "required": true, "type": "json"},
+					"previousPlan": map[string]any{"source": "option", "option": "previous-json", "aliases": []string{"previous-file"}, "type": "json"},
+				},
+			}),
+			testCommand("file.upload", "files.create", map[string]any{"transport": "multipart"}),
+			testCommand("folder.create", "folders.create", map[string]any{
+				"bodyFields": map[string]any{
+					"name":       map[string]any{"source": "option", "option": "name", "required": true},
+					"parentPath": map[string]any{"source": "option", "option": "parent"},
+					"scope":      map[string]any{"source": "option", "option": "scope"},
+				},
+			}),
+		},
+		"routes": []map[string]any{
+			testRoute("workspaces.list", http.MethodGet, "/api/workspaces", "none"),
+			testRoute("workspace-invitations.accept", http.MethodPost, "/api/workspace-invitations/{token}/accept", "json"),
+			testRoute("channels.messages.create", http.MethodPost, "/api/workspaces/{workspaceId}/channels/{channelId}/messages", "json"),
+			testRoute("channels.messages.list", http.MethodGet, "/api/workspaces/{workspaceId}/channels/{channelId}/messages", "none"),
+			testRoute("channels.messages.wait", http.MethodGet, "/api/workspaces/{workspaceId}/channels/{channelId}/messages/wait", "none"),
+			testRoute("direct-messages.list", http.MethodGet, "/api/workspaces/{workspaceId}/direct-messages/{participantId}/messages", "none"),
+			testRoute("wiki.recent-changes", http.MethodGet, "/api/workspaces/{workspaceId}/wiki/recent-changes", "none"),
+			testRoute("wiki.pages.update", http.MethodPatch, "/api/workspaces/{workspaceId}/wiki/pages/{pageTitle}", "json"),
+			testRoute("sysop.agent-job-plan.progression", http.MethodPost, "/api/admin/agent-job-plan/progression", "json"),
+			testRoute("files.create", http.MethodPost, "/api/workspaces/{workspaceId}/files", "multipart"),
+			testRoute("folders.create", http.MethodPost, "/api/workspaces/{workspaceId}/folders", "json"),
+		},
+		"schemaVersion": 1,
+	})
+	return true
+}
+
+func testCommand(id string, operationID string, execution map[string]any) map[string]any {
+	if execution == nil {
+		execution = map[string]any{}
+	}
+	execution["operationId"] = operationID
+	return map[string]any{
+		"command":     "craken " + strings.Replace(id, ".", " ", 1),
+		"description": "Test command " + id,
+		"execution":   execution,
+		"group":       "Test",
+		"id":          id,
+		"operationId": operationID,
+	}
+}
+
+func testRoute(id string, method string, path string, requestBody string) map[string]any {
+	return map[string]any{
+		"auth":        "required",
+		"description": "Test route " + id,
+		"id":          id,
+		"method":      method,
+		"path":        path,
+		"requestBody": requestBody,
 	}
 }
 

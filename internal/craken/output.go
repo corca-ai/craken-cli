@@ -1,7 +1,6 @@
 package craken
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -15,21 +14,6 @@ const (
 	outputWikiVersion  commandOutputKind = "wiki-version"
 	outputWikiVersions commandOutputKind = "wiki-versions"
 )
-
-func printClientCommandOutput(
-	ctx context.Context,
-	client *client,
-	stdout io.Writer,
-	cmd command,
-	kind commandOutputKind,
-	path string,
-) error {
-	parsed, err := client.json(ctx, "GET", path, nil)
-	if err != nil {
-		return err
-	}
-	return printCommandOutput(stdout, parsed, cmd, kind)
-}
 
 func printCommandOutput(stdout io.Writer, value any, cmd command, kind commandOutputKind) error {
 	fields := cmd.string("fields", "")

@@ -59,24 +59,8 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 		return runRawHTTP(ctx, client, cmd.Resource, cmd.Action, cmd, stdout, stdin)
 	case "api":
 		return runRawHTTP(ctx, client, cmd.Action, first(cmd.Positionals, cmd.string("path", "")), cmd.withPositionals(rest(cmd.Positionals)), stdout, stdin)
-	case "workspace":
-		return runWorkspace(ctx, client, cmd, stdout)
-	case "channel":
-		return runChannel(ctx, client, cmd, stdout)
-	case "dm":
-		return runDM(ctx, client, cmd, stdout)
-	case "file":
-		return runFile(ctx, client, cmd, stdout)
-	case "folder":
-		return runFolder(ctx, client, cmd, stdout)
-	case "wiki":
-		return runWiki(ctx, client, cmd, stdout)
-	case "agent":
-		return runAgent(ctx, client, cmd, stdout)
-	case "dream":
-		return runDream(ctx, client, cmd, stdout)
 	default:
-		return fmt.Errorf("unknown resource: %s", cmd.Resource)
+		return runCatalogCommand(ctx, client, cmd, stdout, stdin)
 	}
 }
 
@@ -173,7 +157,7 @@ func runHelp(ctx context.Context, cmd command, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	value, err := client.json(ctx, "GET", "/api/client", nil)
+	value, err := client.json(ctx, "/api/client")
 	if err != nil {
 		return err
 	}
@@ -251,8 +235,8 @@ func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route)
 		title  string
 		fields []catalogField
 	}{
-		{title: "Path parameters", fields: route.PathParameters},
-		{title: "Query parameters", fields: route.QueryParameters},
+		{title: "Path parameters", fields: firstCatalogFields(route.PathParams, route.PathParameters)},
+		{title: "Query parameters", fields: firstCatalogFields(route.QueryParams, route.QueryParameters)},
 		{title: "Body fields", fields: route.BodyFields},
 	} {
 		if err := printCatalogFieldGroup(stdout, group.title, group.fields); err != nil {
@@ -265,6 +249,13 @@ func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route)
 		}
 	}
 	return nil
+}
+
+func firstCatalogFields(primary []catalogField, fallback []catalogField) []catalogField {
+	if len(primary) > 0 {
+		return primary
+	}
+	return fallback
 }
 
 func printCatalogFieldGroup(stdout io.Writer, title string, fields []catalogField) error {

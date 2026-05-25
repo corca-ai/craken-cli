@@ -10,7 +10,7 @@ func resolveWorkspaceID(ctx context.Context, client *client, value string) (stri
 	if looksLikeID(value) {
 		return value, nil
 	}
-	parsed, err := client.json(ctx, "GET", "/api/workspaces", nil)
+	parsed, err := client.json(ctx, "/api/workspaces")
 	if err != nil {
 		return "", err
 	}
@@ -29,7 +29,7 @@ func resolveChannelID(ctx context.Context, client *client, workspaceID string, v
 	if looksLikeID(value) {
 		return value, nil
 	}
-	parsed, err := client.json(ctx, "GET", workspacePath(workspaceID), nil)
+	parsed, err := client.json(ctx, workspacePath(workspaceID))
 	if err != nil {
 		return "", err
 	}
@@ -49,7 +49,7 @@ func resolveParticipantID(ctx context.Context, client *client, workspaceID strin
 		return value, nil
 	}
 	lower := strings.ToLower(value)
-	parsed, err := client.json(ctx, "GET", workspacePath(workspaceID), nil)
+	parsed, err := client.json(ctx, workspacePath(workspaceID))
 	if err != nil {
 		return "", err
 	}

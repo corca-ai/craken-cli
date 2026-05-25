@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -59,55 +57,6 @@ func printJSON(stdout interface{ Write([]byte) (int, error) }, value any) error 
 	return err
 }
 
-func readTextOption(cmd command, valueName string, fileName string) (string, error) {
-	value := cmd.string(valueName, "")
-	file := cmd.string(fileName, "")
-	if value != "" && file != "" {
-		return "", fmt.Errorf("use either --%s or --%s, not both", valueName, fileName)
-	}
-	if file != "" {
-		bytes, err := os.ReadFile(filepath.Clean(file))
-		if err != nil {
-			return "", err
-		}
-		return string(bytes), nil
-	}
-	if value != "" {
-		return value, nil
-	}
-	return "", fmt.Errorf("expected --%s", valueName)
-}
-
-func jsonOption(cmd command, jsonName string, fileName string, required bool) (any, error) {
-	value := cmd.string(jsonName, "")
-	file := cmd.string(fileName, "")
-	if value != "" && file != "" {
-		return nil, fmt.Errorf("use either --%s or --%s, not both", jsonName, fileName)
-	}
-	if value != "" {
-		var parsed any
-		if err := json.Unmarshal([]byte(value), &parsed); err != nil {
-			return nil, err
-		}
-		return parsed, nil
-	}
-	if file != "" {
-		bytes, err := os.ReadFile(filepath.Clean(file))
-		if err != nil {
-			return nil, err
-		}
-		var parsed any
-		if err := json.Unmarshal(bytes, &parsed); err != nil {
-			return nil, err
-		}
-		return parsed, nil
-	}
-	if required {
-		return nil, fmt.Errorf("expected --%s or --%s", jsonName, fileName)
-	}
-	return nil, nil
-}
-
 func numberOption(cmd command, name string, fallback int) (int, error) {
 	value := cmd.string(name, "")
 	if value == "" {
@@ -120,35 +69,8 @@ func numberOption(cmd command, name string, fallback int) (int, error) {
 	return parsed, nil
 }
 
-func positiveNumberOption(cmd command, name string) (*int, error) {
-	value := cmd.string(name, "")
-	if value == "" {
-		return nil, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 1 {
-		return nil, fmt.Errorf("expected positive integer, got %s", value)
-	}
-	return &parsed, nil
-}
-
 func boolOption(cmd command, name string) bool {
 	return cmd.Flags[name] || cmd.string(name, "") != ""
-}
-
-func stringListOption(cmd command, name string) []string {
-	value := cmd.string(name, "")
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part = trim(part); part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func looksLikeID(value string) bool {
@@ -157,10 +79,6 @@ func looksLikeID(value string) bool {
 
 func workspacePath(workspaceID string) string {
 	return "/api/workspaces/" + url.PathEscape(workspaceID)
-}
-
-func wikiPagePath(workspaceID string, title string) string {
-	return workspacePath(workspaceID) + "/wiki/pages/" + url.PathEscape(title)
 }
 
 func bearerProtocols(token string) []string {
