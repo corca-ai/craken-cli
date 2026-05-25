@@ -16,6 +16,9 @@ func TestImportTokenStoresReusableProfile(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		if got := r.Header.Get("Authorization"); got != "Bearer stored-token" {
 			t.Fatalf("unexpected auth header %q", got)
 		}
@@ -128,6 +131,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 				{
 					"command":     "craken channel messages --workspace WORKSPACE --channel CHANNEL [--after MESSAGE_ID] [--before MESSAGE_ID] [--around MESSAGE_ID] [--position latest|start]",
 					"description": "List channel messages with cursor pagination.",
+					"execution":   map[string]any{"operationId": "channels.messages.list", "output": messagesOutputPlan()},
 					"examples":    []string{"craken channel messages --workspace W --channel C --after MESSAGE_ID"},
 					"group":       "Channel",
 					"id":          "channel.messages",
@@ -136,6 +140,14 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 				{
 					"command":     "craken workspace activity --workspace WORKSPACE [--limit N]",
 					"description": "Read workspace activity.",
+					"execution": map[string]any{
+						"operationId": "workspaces.activity",
+						"queryParams": map[string]any{
+							"anchor":         map[string]any{"source": "option", "option": "anchor-json", "aliases": []string{"anchor"}, "type": "json"},
+							"beforeSequence": map[string]any{"source": "option", "option": "before-sequence", "type": "integer"},
+							"surfaces":       map[string]any{"source": "option", "option": "surfaces"},
+						},
+					},
 					"group":       "Workspace",
 					"id":          "workspace.activity",
 					"operationId": "workspaces.activity",
@@ -143,6 +155,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 				{
 					"command":     "craken wiki recent --workspace WORKSPACE",
 					"description": "List recent wiki changes.",
+					"execution":   map[string]any{"operationId": "wiki.recent-changes", "output": wikiRecentOutputPlan()},
 					"group":       "Wiki",
 					"id":          "wiki.recent",
 					"operationId": "wiki.recent-changes",
@@ -158,6 +171,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 					"queryParameters": []map[string]any{
 						{"description": "Read newer messages after this message id.", "name": "after", "type": "string"},
 						{"description": "Read older messages before this message id.", "name": "before", "type": "string"},
+						{"description": "Limit returned rows.", "name": "limit", "type": "integer"},
 					},
 					"requestBody": "none",
 					"responseExample": map[string]any{
@@ -182,6 +196,9 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 					"id":          "wiki.recent-changes",
 					"method":      "GET",
 					"path":        "/api/workspaces/{workspaceId}/wiki/recent-changes",
+					"queryParameters": []map[string]any{
+						{"description": "Limit returned rows.", "name": "limit", "type": "integer"},
+					},
 					"requestBody": "none",
 				},
 			},
@@ -202,7 +219,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 		"--before MESSAGE_ID",
 		"--around MESSAGE_ID",
 		"--position latest|start",
-		"--limit N",
+		"--limit  integer",
 		"--compact",
 		"--fields LIST",
 		"Query parameters:",
@@ -223,7 +240,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceHelp := stdout.String()
-	for _, expected := range []string{"--anchor-json JSON", "--before-sequence N", "--surfaces LIST", "activities"} {
+	for _, expected := range []string{"--anchor-json JSON", "--before-sequence N", "--surfaces VALUE", "activities"} {
 		if !strings.Contains(workspaceHelp, expected) {
 			t.Fatalf("expected focused workspace help to contain %q, got:\n%s", expected, workspaceHelp)
 		}
@@ -233,7 +250,7 @@ func TestFocusedHelpRendersServerCommandLocalOptionsAndMetadata(t *testing.T) {
 	if err := Run(context.Background(), "dev", []string{"wiki", "recent", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if help := stdout.String(); !strings.Contains(help, "--limit N") || !strings.Contains(help, "--compact") || !strings.Contains(help, "--fields LIST") {
+	if help := stdout.String(); !strings.Contains(help, "--limit  integer") || !strings.Contains(help, "--compact") || !strings.Contains(help, "--fields LIST") {
 		t.Fatalf("expected focused wiki help to contain output options, got:\n%s", help)
 	}
 }
@@ -327,6 +344,9 @@ func TestWorkspaceAcceptUsesProfileBearerWhenTokenIsInvitationAlias(t *testing.T
 	var seenAuth string
 	var seenPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		seenAuth = r.Header.Get("Authorization")
 		seenPath = r.URL.Path
 		writeJSON(t, w, map[string]any{"ok": true})
@@ -561,6 +581,9 @@ func TestChannelSendResolvesWorkspaceChannelAndSender(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	var posted map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -603,6 +626,9 @@ func TestMessageCommandsSendLimitQuery(t *testing.T) {
 	seenChannel := false
 	seenDM := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -663,6 +689,9 @@ func TestChannelMessagesCompactOutputOmitsPictures(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	picture := strings.Repeat("picture-data", 100)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -714,6 +743,9 @@ func TestDMMessagesFieldsProjectNestedJSON(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	picture := strings.Repeat("picture-data", 100)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -774,6 +806,9 @@ func TestWikiRecentCompactOutputOmitsAuthorPictures(t *testing.T) {
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	picture := strings.Repeat("picture-data", 100)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -814,6 +849,9 @@ func TestMessageLimitServiceValidationIsPreserved(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -854,6 +892,9 @@ func TestChannelWaitResolvesWorkspaceChannelAndPrintsWaitResponse(t *testing.T) 
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -909,10 +950,22 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	}
 	var seen []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		seen = append(seen, r.Method+" "+r.URL.Path)
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "POST /api/workspaces/workspace-id/wiki/pages":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["title"] != "Home" || body["content"] != "# Home\n" || body["baseVersionNumber"] != float64(12) {
+				t.Fatalf("unexpected wiki create body %#v", body)
+			}
+			writeJSON(t, w, map[string]any{"page": body})
 		case "PATCH /api/workspaces/workspace-id/wiki/pages/Home":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -937,7 +990,11 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--existing-title", "Home", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--existing-title", "Home", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,7 +1002,7 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seen) != 3 {
+	if len(seen) != 5 {
 		t.Fatalf("unexpected request count %d: %#v", len(seen), seen)
 	}
 }
@@ -954,6 +1011,9 @@ func TestWikiSaveReportsBaseVersionConflict(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -990,6 +1050,9 @@ func TestFileUploadUsesMultipartAndFolderCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
@@ -1029,19 +1092,22 @@ func TestFileUploadUsesMultipartAndFolderCreate(t *testing.T) {
 	}
 }
 
-func TestRealtimeFormattingHelpers(t *testing.T) {
-	items, err := realtimeItems([]byte(`{"activities":[{"event":{"type":"message.created","conversation":{"kind":"channel","channel":{"name":"general"}},"message":{"body":"hi","sender":{"name":"Orca"}}}}]}`))
+func TestWebSocketProtocolPlanBuildsBearerPayload(t *testing.T) {
+	client := &client{token: "token-value"}
+	var stdout bytes.Buffer
+	if err := printWebSocketMessage(&stdout, []byte(`{"event":{"type":"message.created"}}`), command{Flags: map[string]bool{"pretty": true}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"message.created"`) {
+		t.Fatalf("unexpected pretty output %q", got)
+	}
+	protocols, err := catalogWebSocketProtocols(context.Background(), client, nil, []commandWebSocketProtocol{
+		{Source: "literal", Value: "craken-bearer"},
+		{Source: "json-payload", Prefix: "craken-bearer-payload.", Payload: map[string]commandBinding{"token": {Source: commandBindingSourceBearerToken}}},
+	}, command{}, map[string]string{}, map[string]bool{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stdout bytes.Buffer
-	if err := printRealtimeItem(&stdout, items[0], command{Flags: map[string]bool{"pretty": true}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := stdout.String(); !strings.Contains(got, "message.created #general Orca: hi") {
-		t.Fatalf("unexpected pretty output %q", got)
-	}
-	protocols := bearerProtocols("token-value")
 	if len(protocols) != 2 || protocols[0] != "craken-bearer" || !strings.HasPrefix(protocols[1], "craken-bearer-payload.") {
 		t.Fatalf("unexpected protocols %#v", protocols)
 	}
@@ -1052,6 +1118,225 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func writeTestCatalog(t *testing.T, w http.ResponseWriter, r *http.Request) bool {
+	t.Helper()
+	if r.Method != http.MethodGet || r.URL.Path != "/api/client" {
+		return false
+	}
+	writeJSON(t, w, map[string]any{
+		"commands": []map[string]any{
+			testCommand("workspace.list", "workspaces.list", nil),
+			testCommand("workspace.accept", "workspace-invitations.accept", map[string]any{
+				"pathParams": map[string]any{"token": map[string]any{"source": "option", "option": "invitation-token", "aliases": []string{"token"}, "required": true}},
+			}),
+			testCommand("channel.send", "channels.messages.create", map[string]any{
+				"bodyFields": map[string]any{
+					"body":        map[string]any{"source": "text", "option": "body", "fileOption": "body-file", "positionals": "join", "required": true},
+					"senderEmail": map[string]any{"source": "option", "option": "sender-email", "aliases": []string{"sender"}},
+				},
+			}),
+			testCommand("channel.messages", "channels.messages.list", map[string]any{"output": messagesOutputPlan()}),
+			testCommand("channel.wait", "channels.messages.wait", map[string]any{
+				"queryParams": map[string]any{
+					"after":     map[string]any{"source": "option", "option": "after"},
+					"timeoutMs": map[string]any{"source": "option", "option": "timeout-ms", "type": "integer"},
+				},
+			}),
+			testCommand("dm.messages", "direct-messages.list", map[string]any{"output": messagesOutputPlan()}),
+			testCommand("wiki.recent", "wiki.recent-changes", map[string]any{"output": wikiRecentOutputPlan()}),
+			{
+				"command":     "craken wiki save",
+				"description": "Save wiki page.",
+				"execution": map[string]any{
+					"bodyFields": map[string]any{
+						"baseVersionNumber": map[string]any{"source": "option", "option": "base-version", "type": "integer"},
+						"content":           map[string]any{"source": "text", "option": "content", "fileOption": "content-file", "required": true},
+						"title":             map[string]any{"source": "option", "option": "title", "required": true},
+					},
+					"operationId": "wiki.pages.create",
+					"pathParams":  map[string]any{"workspaceId": workspaceOptionBinding()},
+					"transport":   "http",
+					"variants": []map[string]any{{
+						"bodyFields": map[string]any{
+							"baseVersionNumber": map[string]any{"source": "option", "option": "base-version", "type": "integer"},
+							"content":           map[string]any{"source": "text", "option": "content", "fileOption": "content-file", "required": true},
+							"title":             map[string]any{"source": "option", "option": "title"},
+						},
+						"operationId": "wiki.pages.update",
+						"pathParams": map[string]any{
+							"workspaceId": workspaceOptionBinding(),
+							"pageTitle":   map[string]any{"source": "option", "option": "existing-title", "required": true},
+						},
+						"when": map[string]any{"option": "existing-title"},
+					}},
+				},
+				"group":       "Wiki",
+				"id":          "wiki.save",
+				"operationId": "wiki.pages.update",
+			},
+			testCommand("agent.plan-check", "sysop.agent-job-plan.progression", map[string]any{
+				"bodyFields": map[string]any{
+					"nextPlan":     map[string]any{"source": "option", "option": "next-json", "aliases": []string{"next-file"}, "required": true, "type": "json"},
+					"previousPlan": map[string]any{"source": "option", "option": "previous-json", "aliases": []string{"previous-file"}, "type": "json"},
+				},
+			}),
+			testCommand("file.upload", "files.create", map[string]any{
+				"multipart": map[string]any{
+					"contentTypeDefault": "application/octet-stream",
+					"contentTypeOption":  "type",
+					"fields": map[string]any{
+						"folderPath": map[string]any{"source": "option", "option": "folder"},
+						"scope":      map[string]any{"source": "option", "option": "scope", "default": "workspace"},
+					},
+					"fileField":       "file",
+					"fileNameDefault": "basename",
+					"fileNameOption":  "name",
+					"fileOption":      "path",
+				},
+				"transport": "multipart",
+			}),
+			testCommand("folder.create", "folders.create", map[string]any{
+				"bodyFields": map[string]any{
+					"name":       map[string]any{"source": "option", "option": "name", "required": true},
+					"parentPath": map[string]any{"source": "option", "option": "parent"},
+					"scope":      map[string]any{"source": "option", "option": "scope"},
+				},
+			}),
+		},
+		"routes": []map[string]any{
+			testRoute("workspaces.list", http.MethodGet, "/api/workspaces", "none"),
+			testRoute("workspaces.get", http.MethodGet, "/api/workspaces/{workspaceId}", "none"),
+			testRoute("workspace-invitations.accept", http.MethodPost, "/api/workspace-invitations/{token}/accept", "json"),
+			testRoute("channels.messages.create", http.MethodPost, "/api/workspaces/{workspaceId}/channels/{channelId}/messages", "json"),
+			testRoute("channels.messages.list", http.MethodGet, "/api/workspaces/{workspaceId}/channels/{channelId}/messages", "none"),
+			testRoute("channels.messages.wait", http.MethodGet, "/api/workspaces/{workspaceId}/channels/{channelId}/messages/wait", "none"),
+			testRoute("direct-messages.list", http.MethodGet, "/api/workspaces/{workspaceId}/direct-messages/{participantId}/messages", "none"),
+			testRoute("wiki.recent-changes", http.MethodGet, "/api/workspaces/{workspaceId}/wiki/recent-changes", "none"),
+			testRoute("wiki.pages.create", http.MethodPost, "/api/workspaces/{workspaceId}/wiki/pages", "json"),
+			testRoute("wiki.pages.update", http.MethodPatch, "/api/workspaces/{workspaceId}/wiki/pages/{pageTitle}", "json"),
+			testRoute("sysop.agent-job-plan.progression", http.MethodPost, "/api/admin/agent-job-plan/progression", "json"),
+			testRoute("files.create", http.MethodPost, "/api/workspaces/{workspaceId}/files", "multipart"),
+			testRoute("folders.create", http.MethodPost, "/api/workspaces/{workspaceId}/folders", "json"),
+		},
+		"schemaVersion": 1,
+	})
+	return true
+}
+
+func testCommand(id string, operationID string, execution map[string]any) map[string]any {
+	if execution == nil {
+		execution = map[string]any{}
+	}
+	execution["operationId"] = operationID
+	if _, ok := execution["pathParams"]; !ok {
+		if pathParams := testPathParams(operationID); len(pathParams) > 0 {
+			execution["pathParams"] = pathParams
+		}
+	}
+	return map[string]any{
+		"command":     "craken " + strings.Replace(id, ".", " ", 1),
+		"description": "Test command " + id,
+		"execution":   execution,
+		"group":       "Test",
+		"id":          id,
+		"operationId": operationID,
+	}
+}
+
+func testPathParams(operationID string) map[string]any {
+	switch operationID {
+	case "workspace-invitations.accept":
+		return map[string]any{"token": map[string]any{"source": "option", "option": "invitation-token", "aliases": []string{"token"}, "required": true}}
+	case "workspaces.get", "wiki.recent-changes", "wiki.pages.create", "folders.create", "files.create":
+		return map[string]any{"workspaceId": workspaceOptionBinding()}
+	case "channels.messages.create", "channels.messages.list", "channels.messages.wait":
+		return map[string]any{"workspaceId": workspaceOptionBinding(), "channelId": channelOptionBinding()}
+	case "direct-messages.list":
+		return map[string]any{"workspaceId": workspaceOptionBinding(), "participantId": participantOptionBinding()}
+	case "wiki.pages.update":
+		return map[string]any{"workspaceId": workspaceOptionBinding(), "pageTitle": map[string]any{"source": "option", "option": "title", "aliases": []string{"page"}, "required": true}}
+	default:
+		return nil
+	}
+}
+
+func workspaceOptionBinding() map[string]any {
+	return map[string]any{
+		"source": "option", "option": "workspace", "required": true,
+		"resolver": map[string]any{
+			"collectionPath": "workspaces",
+			"label":          "workspace",
+			"matchFields":    []string{"id", "name"},
+			"operationId":    "workspaces.list",
+			"resultPath":     "id",
+		},
+	}
+}
+
+func channelOptionBinding() map[string]any {
+	return map[string]any{
+		"source": "option", "option": "channel", "required": true,
+		"resolver": map[string]any{
+			"collectionPath": "channels",
+			"label":          "channel",
+			"matchFields":    []string{"id", "name"},
+			"operationId":    "workspaces.get",
+			"pathParams":     map[string]any{"workspaceId": map[string]any{"source": "resolved", "name": "workspaceId", "required": true}},
+			"resultPath":     "id",
+		},
+	}
+}
+
+func participantOptionBinding() map[string]any {
+	return map[string]any{
+		"source": "option", "option": "target", "aliases": []string{"participant"}, "required": true,
+		"resolver": map[string]any{
+			"collectionPath": "members",
+			"label":          "participant",
+			"matchFields":    []string{"id", "email", "name"},
+			"operationId":    "workspaces.get",
+			"pathParams":     map[string]any{"workspaceId": map[string]any{"source": "resolved", "name": "workspaceId", "required": true}},
+			"resultPath":     "id",
+		},
+	}
+}
+
+func messagesOutputPlan() map[string]any {
+	return map[string]any{
+		"columns": []map[string]any{
+			{"paths": []string{"createdAt"}},
+			{"paths": []string{"sender.name", "sender.email", "sender.id"}},
+			{"paths": []string{"body"}},
+		},
+		"mode":     "table",
+		"rowsPath": "messages",
+	}
+}
+
+func wikiRecentOutputPlan() map[string]any {
+	return map[string]any{
+		"columns": []map[string]any{
+			{"paths": []string{"createdAt"}},
+			{"paths": []string{"createdBy.name", "createdBy.email", "createdBy.id"}},
+			{"paths": []string{"page.title"}},
+			{"paths": []string{"versionNumber"}},
+		},
+		"mode":     "table",
+		"rowsPath": "changes",
+	}
+}
+
+func testRoute(id string, method string, path string, requestBody string) map[string]any {
+	return map[string]any{
+		"auth":        "required",
+		"description": "Test route " + id,
+		"id":          id,
+		"method":      method,
+		"path":        path,
+		"requestBody": requestBody,
 	}
 }
 
