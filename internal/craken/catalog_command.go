@@ -303,12 +303,3 @@ func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd c
 		return fmt.Errorf("unsupported catalog command output mode: %s", output.Mode)
 	}
 }
-
-func optionText(cmd command, names []string) string {
-	for _, name := range names {
-		if value := cmd.string(name, ""); value != "" {
-			return value
-		}
-	}
-	return ""
-}
