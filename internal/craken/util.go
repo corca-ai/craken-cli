@@ -1,16 +1,11 @@
 package craken
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 )
-
-var idPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f-]{27,}$`)
 
 func trim(value string) string {
 	return strings.TrimSpace(value)
@@ -71,20 +66,4 @@ func numberOption(cmd command, name string, fallback int) (int, error) {
 
 func boolOption(cmd command, name string) bool {
 	return cmd.Flags[name] || cmd.string(name, "") != ""
-}
-
-func looksLikeID(value string) bool {
-	return idPattern.MatchString(value)
-}
-
-func workspacePath(workspaceID string) string {
-	return "/api/workspaces/" + url.PathEscape(workspaceID)
-}
-
-func bearerProtocols(token string) []string {
-	payload, _ := json.Marshal(map[string]string{"token": token})
-	return []string{
-		"craken-bearer",
-		"craken-bearer-payload." + base64.RawURLEncoding.EncodeToString(payload),
-	}
 }

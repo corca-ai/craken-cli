@@ -6,16 +6,7 @@ import (
 	"strings"
 )
 
-type commandOutputKind string
-
-const (
-	outputMessages     commandOutputKind = "messages"
-	outputWikiRecent   commandOutputKind = "wiki-recent"
-	outputWikiVersion  commandOutputKind = "wiki-version"
-	outputWikiVersions commandOutputKind = "wiki-versions"
-)
-
-func printCommandOutput(stdout io.Writer, value any, cmd command, kind commandOutputKind) error {
+func printCommandOutput(stdout io.Writer, value any, cmd command, plan commandOutputPlan) error {
 	fields := cmd.string("fields", "")
 	if boolOption(cmd, "compact") && fields != "" {
 		return fmt.Errorf("use either --compact or --fields, not both")
@@ -30,19 +21,10 @@ func printCommandOutput(stdout io.Writer, value any, cmd command, kind commandOu
 	if !boolOption(cmd, "compact") {
 		return printJSON(stdout, value)
 	}
-
-	switch kind {
-	case outputMessages:
-		return printCompactMessages(stdout, value)
-	case outputWikiRecent:
-		return printCompactWikiRows(stdout, collectionFromRoot(value, "changes"), true)
-	case outputWikiVersions:
-		return printCompactWikiRows(stdout, collectionFromRoot(value, "versions"), false)
-	case outputWikiVersion:
-		return printCompactWikiRows(stdout, []any{objectFromRoot(value, "version")}, false)
-	default:
+	if plan.Mode != commandOutputModeTable {
 		return fmt.Errorf("--compact is not supported for this command")
 	}
+	return printCompactTable(stdout, value, plan)
 }
 
 func projectFields(value any, fields string) (any, error) {
@@ -137,40 +119,12 @@ func mergeProjectedValue(left any, right any) any {
 	return right
 }
 
-func printCompactMessages(stdout io.Writer, value any) error {
-	for _, raw := range collectionFromRoot(value, "messages") {
-		message, _ := raw.(map[string]any)
-		if message == nil {
-			continue
+func printCompactTable(stdout io.Writer, value any, plan commandOutputPlan) error {
+	for _, row := range outputRows(value, plan.RowsPath) {
+		cells := make([]string, 0, len(plan.Columns))
+		for _, column := range plan.Columns {
+			cells = append(cells, compactCell(firstColumnValue(row, column.Paths)))
 		}
-		if _, err := fmt.Fprintf(
-			stdout,
-			"%s\t%s\t%s\n",
-			compactCell(stringValue(message["createdAt"])),
-			compactCell(senderLabel(message["sender"])),
-			compactCell(stringValue(message["body"])),
-		); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func printCompactWikiRows(stdout io.Writer, rows []any, includePage bool) error {
-	for _, raw := range rows {
-		row, _ := raw.(map[string]any)
-		if row == nil {
-			continue
-		}
-		cells := []string{
-			compactCell(stringValue(row["createdAt"])),
-			compactCell(senderLabel(row["createdBy"])),
-		}
-		if includePage {
-			page, _ := row["page"].(map[string]any)
-			cells = append(cells, compactCell(stringValue(page["title"])))
-		}
-		cells = append(cells, compactCell(compactScalar(row["versionNumber"])))
 		if _, err := fmt.Fprintln(stdout, strings.Join(cells, "\t")); err != nil {
 			return err
 		}
@@ -178,33 +132,24 @@ func printCompactWikiRows(stdout io.Writer, rows []any, includePage bool) error 
 	return nil
 }
 
-func collectionFromRoot(value any, key string) []any {
-	root, _ := value.(map[string]any)
-	items, _ := root[key].([]any)
-	return items
-}
-
-func objectFromRoot(value any, key string) any {
-	root, _ := value.(map[string]any)
-	return root[key]
-}
-
-func senderLabel(value any) string {
-	sender, _ := value.(map[string]any)
-	if sender == nil {
-		return ""
+func outputRows(value any, rowsPath string) []any {
+	rows := valueAtPath(value, rowsPath)
+	if items, ok := rows.([]any); ok {
+		return items
 	}
-	for _, key := range []string{"name", "email", "id"} {
-		if text := stringValue(sender[key]); text != "" {
+	if rows == nil {
+		return nil
+	}
+	return []any{rows}
+}
+
+func firstColumnValue(row any, paths []string) string {
+	for _, path := range paths {
+		if text := compactScalar(valueAtPath(row, path)); text != "" {
 			return text
 		}
 	}
 	return ""
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }
 
 func compactScalar(value any) string {

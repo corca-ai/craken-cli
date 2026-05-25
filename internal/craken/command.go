@@ -210,7 +210,7 @@ func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route)
 			}
 		}
 	}
-	if options := localCommandHelpOptions(command.ID); len(options) > 0 {
+	if options := localCommandHelpOptions(command); len(options) > 0 {
 		if _, err := fmt.Fprint(stdout, "\nOptions:\n"); err != nil {
 			return err
 		}
@@ -307,44 +307,49 @@ func printResponseExample(stdout io.Writer, value any) error {
 	return err
 }
 
-func localCommandHelpOptions(commandID string) []string {
-	switch commandID {
-	case "channel.messages", "dm.messages", "dm.list":
-		return []string{
-			"--position latest|start   Read the latest page or the beginning of the conversation.",
-			"--before MESSAGE_ID       Read older messages before a response oldestCursor.",
-			"--after MESSAGE_ID        Read newer messages after a response newestCursor.",
-			"--around MESSAGE_ID       Read a page ending at a known message id.",
-			"--limit N                 Request a smaller message page from the service.",
-			"--compact                 Print createdAt, sender, and body as tab-separated text.",
-			"--fields LIST             Print JSON projected to comma-separated dotted fields.",
+func localCommandHelpOptions(command cliCommand) []string {
+	options := []string{}
+	options = append(options, bindingHelpOptions(command.Execution.QueryParams)...)
+	if command.Execution.Output != nil {
+		options = append(options, "--fields LIST             Print JSON projected to comma-separated dotted fields.")
+		if command.Execution.Output.Mode == commandOutputModeTable {
+			options = append(options, "--compact                 Print the catalog table columns as tab-separated text.")
 		}
-	case "channel.wait":
-		return []string{
-			"--after MESSAGE_ID        Wait after a previous message id or newestCursor. Omit to wait after the current newest message.",
-			"--timeout-ms MS          Server-side wait timeout. Defaults to 30000 and caps at 60000.",
-		}
-	case "wiki.recent":
-		return []string{
-			"--limit N                 Limit recent wiki changes.",
-			"--compact                 Print createdAt, author, page, and version as tab-separated text.",
-			"--fields LIST             Print JSON projected to comma-separated dotted fields.",
-		}
-	case "wiki.versions", "wiki.version":
-		return []string{
-			"--compact                 Print createdAt, author, and version as tab-separated text.",
-			"--fields LIST             Print JSON projected to comma-separated dotted fields.",
-		}
-	case "workspace.activity":
-		return []string{
-			"--anchor-json JSON        Activity anchor JSON.",
-			"--before-sequence N       Read activity before a sequence cursor.",
-			"--limit N                 Limit returned activity rows.",
-			"--surfaces LIST           Comma-separated activity surfaces.",
-		}
-	default:
-		return nil
 	}
+	if command.Execution.Poll != nil {
+		options = append(
+			options,
+			fmt.Sprintf("--%s N              Poll interval in seconds.", command.Execution.Poll.IntervalOption),
+			fmt.Sprintf("--%s N             Maximum poll attempts.", command.Execution.Poll.MaxPollsOption),
+		)
+	}
+	if command.Execution.Transport == commandTransportWebSocket {
+		options = append(
+			options,
+			"--limit N                 Stop after receiving N WebSocket messages.",
+			"--timeout-ms MS          Stop when no WebSocket message arrives before the timeout.",
+			"--pretty                 Pretty-print JSON WebSocket messages.",
+		)
+	}
+	return options
+}
+
+func bindingHelpOptions(bindings map[string]commandBinding) []string {
+	options := []string{}
+	for _, binding := range bindings {
+		if binding.Source != commandBindingSourceOption || binding.Option == "" {
+			continue
+		}
+		value := "VALUE"
+		if binding.Type == commandBindingValueTypeInteger {
+			value = "N"
+		}
+		if binding.Type == commandBindingValueTypeJSON {
+			value = "JSON"
+		}
+		options = append(options, fmt.Sprintf("--%s %s", binding.Option, value))
+	}
+	return options
 }
 
 func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {

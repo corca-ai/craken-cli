@@ -53,22 +53,28 @@ type cliCommand struct {
 
 type commandExecution struct {
 	BodyFields  map[string]commandBinding `json:"bodyFields,omitempty"`
+	Multipart   commandMultipartPlan      `json:"multipart,omitempty"`
 	OperationID string                    `json:"operationId,omitempty"`
-	Output      commandExecutionOutput    `json:"output,omitempty"`
+	Output      *commandOutputPlan        `json:"output,omitempty"`
 	PathParams  map[string]commandBinding `json:"pathParams,omitempty"`
+	Poll        *commandPollPlan          `json:"poll,omitempty"`
 	QueryParams map[string]commandBinding `json:"queryParams,omitempty"`
 	Transport   commandTransport          `json:"transport,omitempty"`
 	Variants    []commandExecutionVariant `json:"variants,omitempty"`
+	WebSocket   commandWebSocketPlan      `json:"websocket,omitempty"`
 }
 
 type commandExecutionVariant struct {
 	BodyFields  map[string]commandBinding `json:"bodyFields,omitempty"`
+	Multipart   commandMultipartPlan      `json:"multipart,omitempty"`
 	OperationID string                    `json:"operationId,omitempty"`
-	Output      commandExecutionOutput    `json:"output,omitempty"`
+	Output      *commandOutputPlan        `json:"output,omitempty"`
 	PathParams  map[string]commandBinding `json:"pathParams,omitempty"`
+	Poll        *commandPollPlan          `json:"poll,omitempty"`
 	QueryParams map[string]commandBinding `json:"queryParams,omitempty"`
 	Transport   commandTransport          `json:"transport,omitempty"`
 	When        commandCondition          `json:"when,omitempty"`
+	WebSocket   commandWebSocketPlan      `json:"websocket,omitempty"`
 }
 
 type commandCondition struct {
@@ -77,15 +83,67 @@ type commandCondition struct {
 
 type commandBinding struct {
 	Aliases     []string                  `json:"aliases,omitempty"`
+	Default     any                       `json:"default,omitempty"`
 	FileOption  string                    `json:"fileOption,omitempty"`
+	Name        string                    `json:"name,omitempty"`
 	Option      string                    `json:"option,omitempty"`
 	Positionals commandBindingPositionals `json:"positionals,omitempty"`
 	Required    bool                      `json:"required,omitempty"`
-	Resolver    commandBindingResolver    `json:"resolver,omitempty"`
-	Scope       string                    `json:"scope,omitempty"`
+	Resolver    *commandResolverPlan      `json:"resolver,omitempty"`
 	Source      commandBindingSource      `json:"source,omitempty"`
 	Type        commandBindingValueType   `json:"type,omitempty"`
 	Value       any                       `json:"value,omitempty"`
+}
+
+type commandResolverPlan struct {
+	CollectionPath       string                    `json:"collectionPath"`
+	Label                string                    `json:"label"`
+	MatchFields          []string                  `json:"matchFields"`
+	OperationID          string                    `json:"operationId"`
+	PathParams           map[string]commandBinding `json:"pathParams,omitempty"`
+	RequiredResultPrefix string                    `json:"requiredResultPrefix,omitempty"`
+	ResultPath           string                    `json:"resultPath"`
+	TrimResultPrefix     string                    `json:"trimResultPrefix,omitempty"`
+}
+
+type commandOutputPlan struct {
+	Columns  []commandOutputColumn `json:"columns,omitempty"`
+	Mode     commandOutputMode     `json:"mode"`
+	RowsPath string                `json:"rowsPath,omitempty"`
+}
+
+type commandOutputColumn struct {
+	Paths []string `json:"paths"`
+}
+
+type commandPollPlan struct {
+	DefaultIntervalSeconds int      `json:"defaultIntervalSeconds"`
+	DefaultMaxPolls        int      `json:"defaultMaxPolls"`
+	IntervalOption         string   `json:"intervalOption"`
+	MaxPollsOption         string   `json:"maxPollsOption"`
+	StatusPath             string   `json:"statusPath"`
+	TerminalValues         []string `json:"terminalValues"`
+}
+
+type commandMultipartPlan struct {
+	ContentTypeDefault string                    `json:"contentTypeDefault,omitempty"`
+	ContentTypeOption  string                    `json:"contentTypeOption,omitempty"`
+	Fields             map[string]commandBinding `json:"fields,omitempty"`
+	FileField          string                    `json:"fileField,omitempty"`
+	FileNameDefault    string                    `json:"fileNameDefault,omitempty"`
+	FileNameOption     string                    `json:"fileNameOption,omitempty"`
+	FileOption         string                    `json:"fileOption,omitempty"`
+}
+
+type commandWebSocketPlan struct {
+	Protocols []commandWebSocketProtocol `json:"protocols,omitempty"`
+}
+
+type commandWebSocketProtocol struct {
+	Payload map[string]commandBinding `json:"payload,omitempty"`
+	Prefix  string                    `json:"prefix,omitempty"`
+	Source  string                    `json:"source"`
+	Value   string                    `json:"value,omitempty"`
 }
 
 type commandExample struct {

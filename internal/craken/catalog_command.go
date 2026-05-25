@@ -36,23 +36,19 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	if selectedRoute == nil {
 		return fmt.Errorf("unknown operation for %s: %s", serverCommand.ID, plan.OperationID)
 	}
-	requestPath, resolved, consumed, err := catalogCommandPath(ctx, client, *selectedRoute, plan, cmd)
+	requestPath, resolved, consumed, err := catalogCommandPath(ctx, client, catalog.Routes, *selectedRoute, plan, cmd)
 	if err != nil {
 		return err
 	}
 	switch plan.Transport {
 	case commandTransportHTTP:
-		return runCatalogHTTPCommand(ctx, client, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
+		return runCatalogHTTPCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
 	case commandTransportDownload:
 		return runCatalogDownloadCommand(ctx, client, *selectedRoute, cmd, requestPath, stdout)
 	case commandTransportMultipart:
-		return runCatalogMultipartCommand(ctx, client, cmd, requestPath, stdout)
+		return runCatalogMultipartCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportWebSocket:
-		workspaceID := resolved["workspaceId"]
-		if workspaceID == "" {
-			return fmt.Errorf("websocket command requires workspaceId")
-		}
-		return tailWorkspace(ctx, client, workspaceID, cmd, stdout)
+		return runCatalogWebSocketCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
 	default:
 		return fmt.Errorf("unsupported catalog command transport: %s", plan.Transport)
 	}
@@ -88,8 +84,14 @@ func mergeExecution(base commandExecution, variant commandExecutionVariant) comm
 	if variant.Transport != "" {
 		base.Transport = variant.Transport
 	}
-	if variant.Output != "" {
+	if !isEmptyMultipartPlan(variant.Multipart) {
+		base.Multipart = variant.Multipart
+	}
+	if variant.Output != nil {
 		base.Output = variant.Output
+	}
+	if variant.Poll != nil {
+		base.Poll = variant.Poll
 	}
 	if variant.PathParams != nil {
 		base.PathParams = variant.PathParams
@@ -100,19 +102,26 @@ func mergeExecution(base commandExecution, variant commandExecutionVariant) comm
 	if variant.BodyFields != nil {
 		base.BodyFields = variant.BodyFields
 	}
+	if len(variant.WebSocket.Protocols) > 0 {
+		base.WebSocket = variant.WebSocket
+	}
 	return base
 }
 
-func catalogCommandPath(ctx context.Context, client *client, route route, plan commandExecution, cmd command) (string, map[string]string, map[string]bool, error) {
+func isEmptyMultipartPlan(plan commandMultipartPlan) bool {
+	return plan.FileOption == "" && plan.FileField == "" && len(plan.Fields) == 0
+}
+
+func catalogCommandPath(ctx context.Context, client *client, routes []route, route route, plan commandExecution, cmd command) (string, map[string]string, map[string]bool, error) {
 	consumed := map[string]bool{}
 	resolved := map[string]string{}
 	path := pathParamPattern.ReplaceAllStringFunc(route.Path, func(match string) string {
 		name := match[1 : len(match)-1]
 		binding := plan.PathParams[name]
 		if binding.Source == "" {
-			binding = inferredPathBinding(name)
+			return "\x00missing:" + name
 		}
-		value, err := catalogBindingString(ctx, client, cmd, binding, resolved, consumed)
+		value, err := catalogBindingString(ctx, client, routes, cmd, binding, resolved, consumed)
 		if err != nil {
 			return "\x00error:" + err.Error()
 		}
@@ -132,36 +141,10 @@ func catalogCommandPath(ctx context.Context, client *client, route route, plan c
 	return path, resolved, consumed, nil
 }
 
-func inferredPathBinding(name string) commandBinding {
-	switch name {
-	case "workspaceId":
-		return commandBinding{Option: "workspace", Required: true, Resolver: commandBindingResolverWorkspace, Source: commandBindingSourceOption}
-	case "channelId":
-		return commandBinding{Option: "channel", Required: true, Resolver: commandBindingResolverChannel, Scope: "workspaceId", Source: commandBindingSourceOption}
-	case "participantId":
-		return commandBinding{Aliases: []string{"participant"}, Option: "target", Required: true, Resolver: commandBindingResolverParticipant, Scope: "workspaceId", Source: commandBindingSourceOption}
-	case "pageTitle":
-		return commandBinding{Aliases: []string{"page"}, Option: "title", Required: true, Source: commandBindingSourceOption}
-	case "fileId":
-		return commandBinding{Option: "file", Required: true, Source: commandBindingSourceOption}
-	case "folderId":
-		return commandBinding{Option: "folder", Required: true, Source: commandBindingSourceOption}
-	case "jobId":
-		return commandBinding{Aliases: []string{"wake"}, Option: "job", Required: true, Source: commandBindingSourceOption}
-	case "wakeId":
-		return commandBinding{Option: "wake", Required: true, Source: commandBindingSourceOption}
-	case "token":
-		return commandBinding{Aliases: []string{"token"}, Option: "invitation-token", Required: true, Source: commandBindingSourceOption}
-	case "versionNumber":
-		return commandBinding{Aliases: []string{"version"}, Option: "version-number", Required: true, Source: commandBindingSourceOption}
-	default:
-		return commandBinding{Option: kebabCase(name), Required: true, Source: commandBindingSourceOption}
-	}
-}
-
 func runCatalogHTTPCommand(
 	ctx context.Context,
 	client *client,
+	routes []route,
 	route route,
 	plan commandExecution,
 	cmd command,
@@ -171,13 +154,10 @@ func runCatalogHTTPCommand(
 	stdout io.Writer,
 	stdin io.Reader,
 ) error {
-	if plan.Output == commandExecutionOutputAgentJobWatch {
-		if optionText(cmd, []string{"job", "wake"}) == "" {
-			return fmt.Errorf("expected --job")
-		}
-		return watchAgentJob(ctx, client, resolved["workspaceId"], cmd, stdout)
+	if plan.Poll != nil {
+		return runCatalogPollCommand(ctx, client, routes, route, plan, cmd, path, resolved, consumed, stdout, stdin)
 	}
-	requestPath, spec, err := catalogHTTPRequest(ctx, client, route, plan, cmd, path, resolved, consumed, stdin)
+	requestPath, spec, err := catalogHTTPRequest(ctx, client, routes, route, plan, cmd, path, resolved, consumed, stdin)
 	if err != nil {
 		return err
 	}
@@ -195,6 +175,7 @@ func runCatalogHTTPCommand(
 func catalogHTTPRequest(
 	ctx context.Context,
 	client *client,
+	routes []route,
 	route route,
 	plan commandExecution,
 	cmd command,
@@ -218,7 +199,7 @@ func catalogHTTPRequest(
 	if requestBody == "multipart" {
 		return "", requestSpec{}, fmt.Errorf("operation %s expects multipart request bodies", route.ID)
 	}
-	values, err := catalogValues(ctx, client, cmd, plan.QueryParams, resolved, consumed)
+	values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed)
 	if err != nil {
 		return "", requestSpec{}, err
 	}
@@ -233,7 +214,7 @@ func catalogHTTPRequest(
 		return path, spec, nil
 	}
 	if plan.BodyFields != nil {
-		body, err := catalogValues(ctx, client, cmd, plan.BodyFields, resolved, consumed)
+		body, err := catalogValues(ctx, client, routes, cmd, plan.BodyFields, resolved, consumed)
 		if err != nil {
 			return "", requestSpec{}, err
 		}
@@ -264,37 +245,62 @@ func runCatalogDownloadCommand(ctx context.Context, client *client, route route,
 	return err
 }
 
-func runCatalogMultipartCommand(ctx context.Context, client *client, cmd command, path string, stdout io.Writer) error {
-	filePath, err := cmd.required("path", "file-path")
+func runCatalogMultipartCommand(
+	ctx context.Context,
+	client *client,
+	routes []route,
+	plan commandExecution,
+	cmd command,
+	path string,
+	resolved map[string]string,
+	consumed map[string]bool,
+	stdout io.Writer,
+) error {
+	multipartPlan := plan.Multipart
+	if multipartPlan.FileOption == "" || multipartPlan.FileField == "" {
+		return fmt.Errorf("catalog command %s missing multipart plan", plan.OperationID)
+	}
+	filePath, err := cmd.required(multipartPlan.FileOption)
 	if err != nil {
 		return err
 	}
-	parsed, err := client.multipart(ctx, http.MethodPost, path, map[string]string{
-		"folderPath": cmd.string("folder", ""),
-		"scope":      cmd.string("scope", "workspace"),
-	}, "file", filePath, cmd.string("name", filepath.Base(filePath)), cmd.string("type", "application/octet-stream"))
+	fieldValues, err := catalogValues(ctx, client, routes, cmd, multipartPlan.Fields, resolved, consumed)
+	if err != nil {
+		return err
+	}
+	fields := map[string]string{}
+	for name, value := range fieldValues {
+		fields[name] = fmt.Sprint(value)
+	}
+	fileName := ""
+	if multipartPlan.FileNameOption != "" {
+		fileName = cmd.string(multipartPlan.FileNameOption, "")
+	}
+	if fileName == "" && multipartPlan.FileNameDefault == "basename" {
+		fileName = filepath.Base(filePath)
+	}
+	contentType := multipartPlan.ContentTypeDefault
+	if multipartPlan.ContentTypeOption != "" {
+		contentType = cmd.string(multipartPlan.ContentTypeOption, contentType)
+	}
+	parsed, err := client.multipart(ctx, http.MethodPost, path, fields, multipartPlan.FileField, filePath, fileName, contentType)
 	if err != nil {
 		return err
 	}
 	return printJSON(stdout, parsed)
 }
 
-func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output commandExecutionOutput) error {
-	switch output {
-	case "":
+func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output *commandOutputPlan) error {
+	if output == nil {
 		return printPayload(stdout, payload, cmd)
-	case commandExecutionOutputMessages:
-		return printCommandOutput(stdout, payload.Parsed, cmd, outputMessages)
-	case commandExecutionOutputWikiRecent:
-		return printCommandOutput(stdout, payload.Parsed, cmd, outputWikiRecent)
-	case commandExecutionOutputWikiVersion:
-		return printCommandOutput(stdout, payload.Parsed, cmd, outputWikiVersion)
-	case commandExecutionOutputWikiVersions:
-		return printCommandOutput(stdout, payload.Parsed, cmd, outputWikiVersions)
-	case commandExecutionOutputJSON, commandExecutionOutputBytes:
+	}
+	switch output.Mode {
+	case commandOutputModeJSON, commandOutputModeBytes:
 		return printPayload(stdout, payload, cmd)
+	case commandOutputModeTable:
+		return printCommandOutput(stdout, payload.Parsed, cmd, *output)
 	default:
-		return fmt.Errorf("unsupported catalog command output: %s", output)
+		return fmt.Errorf("unsupported catalog command output mode: %s", output.Mode)
 	}
 }
 

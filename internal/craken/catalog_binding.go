@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 func catalogValues(
 	ctx context.Context,
 	client *client,
+	routes []route,
 	cmd command,
 	bindings map[string]commandBinding,
 	resolved map[string]string,
@@ -20,7 +22,7 @@ func catalogValues(
 ) (map[string]any, error) {
 	values := map[string]any{}
 	for name, binding := range bindings {
-		value, ok, err := catalogBindingValue(ctx, client, cmd, binding, resolved, consumed)
+		value, ok, err := catalogBindingValue(ctx, client, routes, cmd, binding, resolved, consumed)
 		if err != nil {
 			return nil, err
 		}
@@ -34,12 +36,13 @@ func catalogValues(
 func catalogBindingString(
 	ctx context.Context,
 	client *client,
+	routes []route,
 	cmd command,
 	binding commandBinding,
 	resolved map[string]string,
 	consumed map[string]bool,
 ) (string, error) {
-	value, ok, err := catalogBindingValue(ctx, client, cmd, binding, resolved, consumed)
+	value, ok, err := catalogBindingValue(ctx, client, routes, cmd, binding, resolved, consumed)
 	if err != nil {
 		return "", err
 	}
@@ -56,14 +59,26 @@ func catalogBindingString(
 func catalogBindingValue(
 	ctx context.Context,
 	client *client,
+	routes []route,
 	cmd command,
 	binding commandBinding,
 	resolved map[string]string,
 	consumed map[string]bool,
 ) (any, bool, error) {
 	switch binding.Source {
+	case commandBindingSourceBearerToken:
+		return client.token, client.token != "", nil
 	case commandBindingSourceLiteral:
 		return binding.Value, true, nil
+	case commandBindingSourceResolved:
+		value := resolved[binding.Name]
+		if value == "" {
+			if binding.Required {
+				return nil, false, fmt.Errorf("expected resolved value %s", binding.Name)
+			}
+			return nil, false, nil
+		}
+		return value, true, nil
 	case commandBindingSourceFlag:
 		if binding.Option == "" {
 			return nil, false, nil
@@ -78,11 +93,14 @@ func catalogBindingValue(
 			}
 			return value, ok, err
 		}
-		resolvedValue, err := resolveBoundValue(ctx, client, binding, fmt.Sprint(value), resolved)
+		resolvedValue, err := resolveBoundValue(ctx, client, routes, binding, fmt.Sprint(value), resolved)
 		return resolvedValue, true, err
 	case commandBindingSourceOption, "":
 		value, source, ok := bindingOptionValue(cmd, binding)
 		if !ok {
+			if binding.Default != nil {
+				return binding.Default, true, nil
+			}
 			if binding.Required {
 				return nil, false, fmt.Errorf("expected --%s", binding.Option)
 			}
@@ -100,7 +118,7 @@ func catalogBindingValue(
 			}
 			return parsed, true, nil
 		}
-		resolvedValue, err := resolveBoundValue(ctx, client, binding, value, resolved)
+		resolvedValue, err := resolveBoundValue(ctx, client, routes, binding, value, resolved)
 		return resolvedValue, true, err
 	default:
 		return nil, false, fmt.Errorf("unsupported catalog binding source: %s", binding.Source)
@@ -165,38 +183,138 @@ func jsonBindingValue(value string, source string) (any, error) {
 func resolveBoundValue(
 	ctx context.Context,
 	client *client,
+	routes []route,
 	binding commandBinding,
 	value string,
 	resolved map[string]string,
 ) (string, error) {
-	switch binding.Resolver {
-	case "":
+	if binding.Resolver == nil {
 		return value, nil
-	case commandBindingResolverWorkspace:
-		return resolveWorkspaceID(ctx, client, value)
-	case commandBindingResolverChannel:
-		workspaceID := resolved[binding.Scope]
-		if workspaceID == "" {
-			return "", fmt.Errorf("resolver channel requires scope %s", binding.Scope)
-		}
-		return resolveChannelID(ctx, client, workspaceID, value)
-	case commandBindingResolverParticipant, commandBindingResolverAgent:
-		workspaceID := resolved[binding.Scope]
-		if workspaceID == "" {
-			return "", fmt.Errorf("resolver %s requires scope %s", binding.Resolver, binding.Scope)
-		}
-		participantID, err := resolveParticipantID(ctx, client, workspaceID, value)
-		if err != nil {
-			return "", err
-		}
-		if binding.Resolver == commandBindingResolverAgent {
-			if !strings.HasPrefix(participantID, "agent:") {
-				return "", fmt.Errorf("dream agent must resolve to an agent participant, got %s", participantID)
-			}
-			return strings.TrimPrefix(participantID, "agent:"), nil
-		}
-		return participantID, nil
-	default:
-		return "", fmt.Errorf("unsupported catalog resolver: %s", binding.Resolver)
 	}
+	return resolveCatalogValue(ctx, client, routes, *binding.Resolver, value, resolved)
+}
+
+func resolveCatalogValue(
+	ctx context.Context,
+	client *client,
+	routes []route,
+	plan commandResolverPlan,
+	value string,
+	resolved map[string]string,
+) (string, error) {
+	route := routeByID(routes, plan.OperationID)
+	if route == nil {
+		return "", fmt.Errorf("unknown resolver operation: %s", plan.OperationID)
+	}
+	path, err := catalogResolverPath(ctx, client, routes, *route, plan.PathParams, resolved)
+	if err != nil {
+		return "", err
+	}
+	root, err := client.json(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	items, ok := valueAtPath(root, plan.CollectionPath).([]any)
+	if !ok {
+		return "", fmt.Errorf("resolver %s expected array at %s", planLabel(plan), plan.CollectionPath)
+	}
+	var matched any
+	for _, item := range items {
+		if matchesCatalogResolverItem(item, plan.MatchFields, value) {
+			if matched != nil {
+				return "", fmt.Errorf("multiple %s matches for %s", planLabel(plan), value)
+			}
+			matched = item
+		}
+	}
+	if matched == nil {
+		return "", fmt.Errorf("unknown %s: %s", planLabel(plan), value)
+	}
+	result := valueString(valueAtPath(matched, plan.ResultPath))
+	if plan.RequiredResultPrefix != "" && !strings.HasPrefix(result, plan.RequiredResultPrefix) {
+		return "", fmt.Errorf("%s must resolve to %s value, got %s", planLabel(plan), plan.RequiredResultPrefix, result)
+	}
+	if plan.TrimResultPrefix != "" {
+		result = strings.TrimPrefix(result, plan.TrimResultPrefix)
+	}
+	if result == "" {
+		return "", fmt.Errorf("resolver %s returned empty %s", planLabel(plan), plan.ResultPath)
+	}
+	return result, nil
+}
+
+func catalogResolverPath(
+	ctx context.Context,
+	client *client,
+	routes []route,
+	route route,
+	pathParams map[string]commandBinding,
+	resolved map[string]string,
+) (string, error) {
+	path := pathParamPattern.ReplaceAllStringFunc(route.Path, func(match string) string {
+		name := match[1 : len(match)-1]
+		binding := pathParams[name]
+		if binding.Source == "" {
+			return "\x00missing:" + name
+		}
+		value, err := catalogBindingString(ctx, client, routes, command{}, binding, resolved, map[string]bool{})
+		if err != nil {
+			return "\x00error:" + err.Error()
+		}
+		if value == "" {
+			return "\x00missing:" + name
+		}
+		return url.PathEscape(value)
+	})
+	if strings.Contains(path, "\x00error:") {
+		return "", fmt.Errorf("%s", strings.TrimPrefix(path[strings.Index(path, "\x00error:"):], "\x00error:"))
+	}
+	if strings.Contains(path, "\x00missing:") {
+		name := strings.TrimPrefix(path[strings.Index(path, "\x00missing:"):], "\x00missing:")
+		return "", fmt.Errorf("resolver %s requires path binding %s", route.ID, name)
+	}
+	return path, nil
+}
+
+func matchesCatalogResolverItem(item any, fields []string, value string) bool {
+	for _, field := range fields {
+		itemValue := valueString(valueAtPath(item, field))
+		if strings.EqualFold(itemValue, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueAtPath(value any, path string) any {
+	if path == "" {
+		return value
+	}
+	current := value
+	for _, part := range strings.Split(path, ".") {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current = object[part]
+	}
+	return current
+}
+
+func valueString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
+func planLabel(plan commandResolverPlan) string {
+	if plan.Label != "" {
+		return plan.Label
+	}
+	return plan.OperationID
 }
