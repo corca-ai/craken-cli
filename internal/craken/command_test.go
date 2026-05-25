@@ -943,6 +943,15 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/workspaces":
 			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "POST /api/workspaces/workspace-id/wiki/pages":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["title"] != "Home" || body["content"] != "# Home\n" || body["baseVersionNumber"] != float64(12) {
+				t.Fatalf("unexpected wiki create body %#v", body)
+			}
+			writeJSON(t, w, map[string]any{"page": body})
 		case "PATCH /api/workspaces/workspace-id/wiki/pages/Home":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -967,7 +976,11 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--existing-title", "Home", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = Run(context.Background(), "dev", []string{"wiki", "save", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--existing-title", "Home", "--title", "Home", "--content-file", contentPath, "--base-version", "12"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -975,7 +988,7 @@ func TestWikiSaveAndAgentPlanCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seen) != 3 {
+	if len(seen) != 5 {
 		t.Fatalf("unexpected request count %d: %#v", len(seen), seen)
 	}
 }
@@ -1117,14 +1130,32 @@ func writeTestCatalog(t *testing.T, w http.ResponseWriter, r *http.Request) bool
 			}),
 			testCommand("dm.messages", "direct-messages.list", map[string]any{"output": "messages"}),
 			testCommand("wiki.recent", "wiki.recent-changes", map[string]any{"output": "wiki-recent"}),
-			testCommand("wiki.save", "wiki.pages.update", map[string]any{
-				"bodyFields": map[string]any{
-					"baseVersionNumber": map[string]any{"source": "option", "option": "base-version", "type": "integer"},
-					"content":           map[string]any{"source": "text", "option": "content", "fileOption": "content-file", "required": true},
-					"title":             map[string]any{"source": "option", "option": "title"},
+			{
+				"command":     "craken wiki save",
+				"description": "Save wiki page.",
+				"execution": map[string]any{
+					"bodyFields": map[string]any{
+						"baseVersionNumber": map[string]any{"source": "option", "option": "base-version", "type": "integer"},
+						"content":           map[string]any{"source": "text", "option": "content", "fileOption": "content-file", "required": true},
+						"title":             map[string]any{"source": "option", "option": "title", "required": true},
+					},
+					"operationId": "wiki.pages.create",
+					"transport":   "http",
+					"variants": []map[string]any{{
+						"bodyFields": map[string]any{
+							"baseVersionNumber": map[string]any{"source": "option", "option": "base-version", "type": "integer"},
+							"content":           map[string]any{"source": "text", "option": "content", "fileOption": "content-file", "required": true},
+							"title":             map[string]any{"source": "option", "option": "title"},
+						},
+						"operationId": "wiki.pages.update",
+						"pathParams":  map[string]any{"pageTitle": map[string]any{"source": "option", "option": "existing-title", "required": true}},
+						"when":        map[string]any{"option": "existing-title"},
+					}},
 				},
-				"pathParams": map[string]any{"pageTitle": map[string]any{"source": "option", "option": "existing-title", "required": true}},
-			}),
+				"group":       "Wiki",
+				"id":          "wiki.save",
+				"operationId": "wiki.pages.update",
+			},
 			testCommand("agent.plan-check", "sysop.agent-job-plan.progression", map[string]any{
 				"bodyFields": map[string]any{
 					"nextPlan":     map[string]any{"source": "option", "option": "next-json", "aliases": []string{"next-file"}, "required": true, "type": "json"},
@@ -1148,6 +1179,7 @@ func writeTestCatalog(t *testing.T, w http.ResponseWriter, r *http.Request) bool
 			testRoute("channels.messages.wait", http.MethodGet, "/api/workspaces/{workspaceId}/channels/{channelId}/messages/wait", "none"),
 			testRoute("direct-messages.list", http.MethodGet, "/api/workspaces/{workspaceId}/direct-messages/{participantId}/messages", "none"),
 			testRoute("wiki.recent-changes", http.MethodGet, "/api/workspaces/{workspaceId}/wiki/recent-changes", "none"),
+			testRoute("wiki.pages.create", http.MethodPost, "/api/workspaces/{workspaceId}/wiki/pages", "json"),
 			testRoute("wiki.pages.update", http.MethodPatch, "/api/workspaces/{workspaceId}/wiki/pages/{pageTitle}", "json"),
 			testRoute("sysop.agent-job-plan.progression", http.MethodPost, "/api/admin/agent-job-plan/progression", "json"),
 			testRoute("files.create", http.MethodPost, "/api/workspaces/{workspaceId}/files", "multipart"),
