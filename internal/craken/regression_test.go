@@ -507,3 +507,57 @@ func TestCatalogDownloadAppendsQueryParams(t *testing.T) {
 		t.Fatalf("expected download to send variant query, got %q", seenQuery)
 	}
 }
+
+// TestCompactScalarFormatsLargeNumbersAsDecimal pins that numeric compact-table
+// cells render in plain decimal, not scientific notation. JSON numbers decode to
+// float64, whose %v rendering switches to e-notation at magnitudes >= 1e6.
+func TestCompactScalarFormatsLargeNumbersAsDecimal(t *testing.T) {
+	cases := []struct {
+		value any
+		want  string
+	}{
+		{float64(1234567), "1234567"},
+		{float64(1000000), "1000000"},
+		{float64(3), "3"},
+		{float64(0.5), "0.5"},
+		{"hi", "hi"},
+	}
+	for _, tc := range cases {
+		if got := firstColumnValue(map[string]any{"v": tc.value}, []string{"v"}); got != tc.want {
+			t.Fatalf("firstColumnValue(%v) = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+}
+
+// TestWikiRecentCompactRendersLargeVersionNumberAsDecimal is the end-to-end
+// counterpart over a real catalog table column.
+func TestWikiRecentCompactRendersLargeVersionNumberAsDecimal(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id/wiki/recent-changes":
+			writeJSON(t, w, map[string]any{"changes": []map[string]any{{
+				"createdAt": "2026-05-21T12:00:00.000Z", "createdBy": map[string]any{"id": "user:ada", "name": "Ada"},
+				"page": map[string]any{"title": "Home"}, "versionNumber": 1234567,
+			}}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"wiki", "recent", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--compact",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "2026-05-21T12:00:00.000Z\tAda\tHome\t1234567\n"; got != want {
+		t.Fatalf("unexpected compact wiki output %q", got)
+	}
+}

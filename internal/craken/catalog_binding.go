@@ -310,6 +310,11 @@ func valueString(value any) string {
 		return typed
 	case nil:
 		return ""
+	case float64:
+		// JSON numbers decode to float64; render in plain decimal so large
+		// integers don't come out in scientific notation (e.g. 1234567, not
+		// "1.234567e+06").
+		return strconv.FormatFloat(typed, 'f', -1, 64)
 	default:
 		return fmt.Sprint(typed)
 	}

@@ -145,18 +145,11 @@ func outputRows(value any, rowsPath string) []any {
 
 func firstColumnValue(row any, paths []string) string {
 	for _, path := range paths {
-		if text := compactScalar(valueAtPath(row, path)); text != "" {
+		if text := valueString(valueAtPath(row, path)); text != "" {
 			return text
 		}
 	}
 	return ""
-}
-
-func compactScalar(value any) string {
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprint(value)
 }
 
 func compactCell(value string) string {
