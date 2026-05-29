@@ -282,3 +282,33 @@ func TestChannelSendBodyFileReadsPlaintext(t *testing.T) {
 		t.Fatalf("unexpected posted body %#v", posted)
 	}
 }
+
+// TestWikiSaveContentValueAndFileConflictReportsMutualExclusion pins that passing
+// both the value and file form of a required text binding surfaces the
+// descriptive "not both" error instead of masking it with "expected --content".
+func TestWikiSaveContentValueAndFileConflictReportsMutualExclusion(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), "dev", []string{
+		"wiki", "save", "--token", "test-token", "--base-url", server.URL,
+		"--workspace", "test0", "--title", "Home", "--content", "inline", "--content-file", "home.md",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected mutual-exclusion error")
+	}
+	if !strings.Contains(err.Error(), "use either --content or --content-file, not both") {
+		t.Fatalf("expected mutual-exclusion message, got %q", err.Error())
+	}
+}

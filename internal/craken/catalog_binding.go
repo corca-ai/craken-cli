@@ -88,7 +88,10 @@ func catalogBindingValue(
 	case commandBindingSourceText:
 		value, ok, err := textBindingValue(cmd, binding)
 		if err != nil || !ok {
-			if binding.Required && !ok {
+			// Only report the binding as missing when it is genuinely absent
+			// (err == nil); otherwise surface the real error (e.g. the
+			// value/file mutual-exclusion message) instead of masking it.
+			if err == nil && binding.Required && !ok {
 				return nil, false, fmt.Errorf("expected --%s", binding.Option)
 			}
 			return value, ok, err
