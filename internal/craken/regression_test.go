@@ -412,3 +412,51 @@ func TestCatalogJSONQueryParamSerializedAsJSON(t *testing.T) {
 		t.Fatalf("anchor query is not valid JSON (%q): %v", receivedAnchor, err)
 	}
 }
+
+// TestCatalogPollDoesNotLeakControlFlags pins that client-only poll controls
+// (--verbose, --interval, --max-polls) are not forwarded to the server when a
+// poll command declares no query params.
+func TestCatalogPollDoesNotLeakControlFlags(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	var seenQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/client":
+			writeJSON(t, w, map[string]any{
+				"schemaVersion": 1,
+				"commands": []map[string]any{{
+					"command": "craken job watch", "description": "Watch a job.", "group": "Job",
+					"id": "job.watch", "operationId": "jobs.get",
+					"execution": map[string]any{
+						"operationId": "jobs.get",
+						"poll": map[string]any{
+							"defaultMaxPolls": 1, "intervalOption": "interval", "maxPollsOption": "max-polls",
+							"statusPath": "status", "terminalValues": []string{"done"},
+						},
+					},
+				}},
+				"routes": []map[string]any{{
+					"auth": "required", "description": "Get a job.", "id": "jobs.get",
+					"method": "GET", "path": "/api/jobs", "requestBody": "none",
+				}},
+			})
+		case "/api/jobs":
+			seenQuery = r.URL.RawQuery
+			writeJSON(t, w, map[string]any{"status": "done"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"job", "watch", "--base-url", server.URL, "--token", "test-token", "--verbose", "--interval", "5", "--max-polls", "3",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"verbose", "interval", "maxPolls"} {
+		if strings.Contains(seenQuery, leaked) {
+			t.Fatalf("control flag %q leaked into query %q", leaked, seenQuery)
+		}
+	}
+}
