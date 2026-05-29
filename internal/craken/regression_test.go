@@ -363,3 +363,52 @@ func TestCatalogPostCarriesQueryParamsAlongsideBody(t *testing.T) {
 		t.Fatalf("expected name body field, got %#v", seenBody)
 	}
 }
+
+// TestCatalogJSONQueryParamSerializedAsJSON pins that a type:json query param is
+// sent as JSON. Before the fix appendQuery rendered the parsed value with
+// fmt.Sprint, producing Go map syntax like "map[sequence:5 surface:channel]".
+func TestCatalogJSONQueryParamSerializedAsJSON(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	var receivedAnchor string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/client":
+			writeJSON(t, w, map[string]any{
+				"schemaVersion": 1,
+				"commands": []map[string]any{{
+					"command": "craken workspace activity --workspace WORKSPACE", "description": "Read workspace activity.",
+					"group": "Workspace", "id": "workspace.activity", "operationId": "workspaces.activity",
+					"execution": map[string]any{
+						"operationId": "workspaces.activity",
+						"pathParams":  map[string]any{"workspaceId": map[string]any{"source": "option", "option": "workspace", "required": true}},
+						"queryParams": map[string]any{"anchor": map[string]any{"source": "option", "option": "anchor-json", "aliases": []string{"anchor"}, "type": "json"}},
+					},
+				}},
+				"routes": []map[string]any{{
+					"auth": "required", "description": "Read workspace activity.", "id": "workspaces.activity",
+					"method": "GET", "path": "/api/workspaces/{workspaceId}/activity", "requestBody": "none",
+				}},
+			})
+		case "GET /api/workspaces/ws-1/activity":
+			receivedAnchor = r.URL.Query().Get("anchor")
+			writeJSON(t, w, map[string]any{"activities": []any{}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"workspace", "activity", "--token", "test-token", "--base-url", server.URL,
+		"--workspace", "ws-1", "--anchor-json", `{"sequence":5,"surface":"channel"}`,
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(receivedAnchor, "map[") {
+		t.Fatalf("anchor sent as Go map syntax, not JSON: %q", receivedAnchor)
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(receivedAnchor), &decoded); err != nil {
+		t.Fatalf("anchor query is not valid JSON (%q): %v", receivedAnchor, err)
+	}
+}

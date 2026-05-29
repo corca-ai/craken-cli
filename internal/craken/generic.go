@@ -610,7 +610,7 @@ func appendQuery(path string, values map[string]any) string {
 		if value == nil {
 			continue
 		}
-		text := fmt.Sprint(value)
+		text := queryParamString(value)
 		if text != "" {
 			params.Add(key, text)
 		}
@@ -623,6 +623,19 @@ func appendQuery(path string, values map[string]any) string {
 		separator = "&"
 	}
 	return path + separator + params.Encode()
+}
+
+// queryParamString renders a query value for the wire. Composite values (from a
+// type:json binding) are re-encoded as JSON so the server receives valid JSON;
+// scalars keep their plain fmt.Sprint rendering.
+func queryParamString(value any) string {
+	switch value.(type) {
+	case map[string]any, []any:
+		if encoded, err := json.Marshal(value); err == nil {
+			return string(encoded)
+		}
+	}
+	return fmt.Sprint(value)
 }
 
 func optionValue(cmd command, name string) (string, bool) {
