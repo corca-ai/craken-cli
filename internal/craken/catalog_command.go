@@ -44,7 +44,7 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	case commandTransportHTTP:
 		return runCatalogHTTPCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
 	case commandTransportDownload:
-		return runCatalogDownloadCommand(ctx, client, *selectedRoute, cmd, requestPath, stdout)
+		return runCatalogDownloadCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportMultipart:
 		return runCatalogMultipartCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportWebSocket:
@@ -231,7 +231,14 @@ func catalogHTTPRequest(
 	return path, spec, nil
 }
 
-func runCatalogDownloadCommand(ctx context.Context, client *client, route route, cmd command, path string, stdout io.Writer) error {
+func runCatalogDownloadCommand(ctx context.Context, client *client, routes []route, route route, plan commandExecution, cmd command, path string, resolved map[string]string, consumed map[string]bool, stdout io.Writer) error {
+	if plan.QueryParams != nil {
+		values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed)
+		if err != nil {
+			return err
+		}
+		path = appendQuery(path, values)
+	}
 	response, err := client.raw(ctx, route.Method, path, requestSpec{})
 	if err != nil {
 		return err

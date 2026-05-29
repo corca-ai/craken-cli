@@ -460,3 +460,50 @@ func TestCatalogPollDoesNotLeakControlFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestCatalogDownloadAppendsQueryParams pins that a download command forwards its
+// declared query params, the same way the HTTP and websocket transports do.
+func TestCatalogDownloadAppendsQueryParams(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	var seenQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/client":
+			writeJSON(t, w, map[string]any{
+				"schemaVersion": 1,
+				"commands": []map[string]any{{
+					"command": "craken file download --workspace WORKSPACE --variant VARIANT", "description": "Download a file.",
+					"group": "File", "id": "file.download", "operationId": "files.download",
+					"execution": map[string]any{
+						"operationId": "files.download", "transport": "download",
+						"pathParams":  map[string]any{"workspaceId": workspaceOptionBinding()},
+						"queryParams": map[string]any{"variant": map[string]any{"source": "option", "option": "variant"}},
+					},
+				}},
+				"routes": []map[string]any{
+					testRoute("workspaces.list", http.MethodGet, "/api/workspaces", "none"),
+					testRoute("files.download", http.MethodGet, "/api/workspaces/{workspaceId}/files", "none"),
+				},
+			})
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id/files":
+			seenQuery = r.URL.RawQuery
+			if _, err := w.Write([]byte("BINARY")); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"file", "download", "--token", "test-token", "--base-url", server.URL, "--workspace", "test0", "--variant", "thumbnail",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenQuery, "variant=thumbnail") {
+		t.Fatalf("expected download to send variant query, got %q", seenQuery)
+	}
+}
