@@ -3,6 +3,7 @@ package craken
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 )
 
 var openBrowser = openBrowserDefault
+
+// errAgentSessionUnsupported signals that the server does not expose the direct
+// agent-session endpoint, so the caller should fall back to the device flow.
+var errAgentSessionUnsupported = errors.New("agent session endpoint not available")
 
 func runAuth(ctx context.Context, cmd command, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	switch cmd.Action {
@@ -71,7 +76,7 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 		if err != nil {
 			return err
 		}
-		agentResult, err := receiveAgentDeviceLogin(ctx, baseURL, time.Duration(timeoutMS)*time.Millisecond, request, boolOption(cmd, "no-open"), stderr)
+		agentResult, err := authorizeAgent(ctx, cfg, cmd, baseURL, time.Duration(timeoutMS)*time.Millisecond, request, stderr)
 		if err != nil {
 			return err
 		}
@@ -321,7 +326,94 @@ func agentLoginRequestFromCommand(cmd command) (agentLoginRequest, error) {
 	}, nil
 }
 
+// authorizeAgent provisions an agent identity. When an existing user bearer token
+// is available it mints the agent session directly (no browser approval); it only
+// falls back to the browser device flow when there is no user token, when the
+// server lacks the direct endpoint, or when the caller forces it with --device-code.
+func authorizeAgent(ctx context.Context, cfg config, cmd command, baseURL string, timeout time.Duration, request agentLoginRequest, stderr io.Writer) (loginResult, error) {
+	if boolOption(cmd, "device-code") {
+		return receiveAgentDeviceLogin(ctx, baseURL, timeout, request, boolOption(cmd, "no-open"), stderr)
+	}
+	userToken := userTokenForAgentLogin(cfg, cmd)
+	if userToken == "" {
+		return receiveAgentDeviceLogin(ctx, baseURL, timeout, request, boolOption(cmd, "no-open"), stderr)
+	}
+	result, err := receiveAgentSession(ctx, baseURL, userToken, request)
+	if err == nil {
+		return result, nil
+	}
+	if errors.Is(err, errAgentSessionUnsupported) && !boolOption(cmd, "no-device-fallback") {
+		if _, ferr := fmt.Fprintf(stderr, "Direct agent authorization is unavailable on this server; falling back to browser approval...\n"); ferr != nil {
+			return loginResult{}, ferr
+		}
+		return receiveAgentDeviceLogin(ctx, baseURL, timeout, request, boolOption(cmd, "no-open"), stderr)
+	}
+	return loginResult{}, err
+}
+
+// userTokenForAgentLogin resolves the user bearer token used to authorize an
+// agent without a browser round-trip. Precedence: explicit --use-user-profile,
+// then CRAKEN_TOKEN, then the "default" profile, then a single user profile if
+// exactly one exists. Agent profiles are never used to mint further agents.
+func userTokenForAgentLogin(cfg config, cmd command) string {
+	if name := cmd.string("use-user-profile", ""); name != "" {
+		return trim(cfg.Profiles[name].Token)
+	}
+	if env := getenvTrim("CRAKEN_TOKEN"); env != "" {
+		return env
+	}
+	if prof, ok := cfg.Profiles["default"]; ok && trim(prof.Token) != "" && prof.Kind != "agent" {
+		return trim(prof.Token)
+	}
+	token := ""
+	count := 0
+	for _, prof := range cfg.Profiles {
+		if trim(prof.Token) != "" && prof.Kind != "agent" {
+			token = trim(prof.Token)
+			count++
+		}
+	}
+	if count == 1 {
+		return token
+	}
+	return ""
+}
+
+// receiveAgentSession mints an agent bearer token from the authenticated
+// /api/client/agent-sessions endpoint using the caller's existing user token.
+func receiveAgentSession(ctx context.Context, baseURL string, userToken string, request agentLoginRequest) (loginResult, error) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	var token deviceTokenResponse
+	status, raw, err := postJSONWithToken(ctx, httpClient, baseURL, "/api/client/agent-sessions", userToken, request, &token)
+	if err != nil {
+		return loginResult{}, err
+	}
+	if status == http.StatusNotFound {
+		return loginResult{}, errAgentSessionUnsupported
+	}
+	if status < 200 || status >= 300 {
+		if token.Message != "" {
+			return loginResult{}, fmt.Errorf("agent authorization failed: %s", token.Message)
+		}
+		return loginResult{}, fmt.Errorf("agent authorization failed with %d: %s", status, string(raw))
+	}
+	if trim(token.Token) == "" {
+		return loginResult{}, fmt.Errorf("agent authorization response did not include a token")
+	}
+	var agent *loginAgent
+	if token.Agent != nil {
+		agent = &loginAgent{ClientKind: token.Agent.ClientKind, ID: token.Agent.AgentID, Name: token.Agent.Name, WorkspaceID: request.WorkspaceID}
+	}
+	return loginResult{Agent: agent, Session: token.Session, Token: token.Token, TokenType: firstNonEmpty(token.TokenType, "Bearer")}, nil
+}
+
 func postPublicJSON(ctx context.Context, httpClient *http.Client, baseURL string, path string, body any, target any) (int, []byte, error) {
+	return postJSONWithToken(ctx, httpClient, baseURL, path, "", body, target)
+}
+
+// postJSONWithToken posts a JSON body to a public endpoint, attaching a bearer
+// token when one is provided. An empty token leaves the request unauthenticated.
+func postJSONWithToken(ctx context.Context, httpClient *http.Client, baseURL string, path string, token string, body any, target any) (int, []byte, error) {
 	endpoint, err := resolvePublicEndpoint(baseURL, path)
 	if err != nil {
 		return 0, nil, err
@@ -336,6 +428,9 @@ func postPublicJSON(ctx context.Context, httpClient *http.Client, baseURL string
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
+	if trim(token) != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	response, err := httpClient.Do(request)
 	if err != nil {
