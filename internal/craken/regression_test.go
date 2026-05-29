@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -231,5 +233,52 @@ func TestUserLoginClearsStaleAgentMetadata(t *testing.T) {
 	}
 	if p.Kind == "agent" || p.AgentID != "" || p.AgentName != "" || p.ClientKind != "" || p.WorkspaceID != "" {
 		t.Fatalf("expected agent metadata cleared, got %#v", p)
+	}
+}
+
+// TestChannelSendBodyFileReadsPlaintext pins that a catalog text binding's
+// fileOption (channel send --body-file) is read as plaintext. Before the fix the
+// generic JSON body handler claimed --body-file, tried to JSON-parse the message
+// file, and failed before any message was sent.
+func TestChannelSendBodyFileReadsPlaintext(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	bodyPath := filepath.Join(t.TempDir(), "msg.txt")
+	if err := os.WriteFile(bodyPath, []byte("hello from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var posted map[string]any
+	gotPost := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{"channels": []map[string]any{{"id": "channel-id", "name": "general"}}, "members": []map[string]any{}})
+		case "POST /api/workspaces/workspace-id/channels/channel-id/messages":
+			gotPost = true
+			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"channel", "send", "--token", "test-token", "--base-url", server.URL,
+		"--workspace", "test0", "--channel", "general", "--body-file", bodyPath,
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !gotPost {
+		t.Fatal("message POST never fired")
+	}
+	if posted["body"] != "hello from file" {
+		t.Fatalf("unexpected posted body %#v", posted)
 	}
 }

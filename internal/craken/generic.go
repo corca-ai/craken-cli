@@ -494,9 +494,12 @@ func requestHeadersFromOptions(cmd command) http.Header {
 
 func jsonBodyFromOptions(cmd command, stdin io.Reader) (any, bool, error) {
 	jsonValue := firstNonEmpty(cmd.string("json", ""), cmd.string("body-json", ""))
-	file := firstNonEmpty(cmd.string("json-file", ""), cmd.string("body-file", ""))
+	// --body-file is intentionally not a generic JSON body source: catalog text
+	// fields (e.g. channel send) bind it as a plaintext fileOption, so the
+	// generic JSON file input is keyed only on --json-file.
+	file := cmd.string("json-file", "")
 	if jsonValue != "" && file != "" {
-		return nil, false, fmt.Errorf("use either --json/--body-json or --json-file/--body-file, not both")
+		return nil, false, fmt.Errorf("use either --json/--body-json or --json-file, not both")
 	}
 	var bytes []byte
 	var err error
