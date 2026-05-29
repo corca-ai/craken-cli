@@ -72,3 +72,69 @@ func TestAPIWithoutMethodDoesNotSendHelpMethod(t *testing.T) {
 		t.Fatalf("client sent a bogus HELP method: %q", recorded)
 	}
 }
+
+// TestBoolOptionHonorsExplicitValue pins that an inline boolean value is parsed
+// rather than treated as "present == true". Before the fix `--flag=false`
+// (stored in Options, not Flags) read as true.
+func TestBoolOptionHonorsExplicitValue(t *testing.T) {
+	cases := []struct {
+		args []string
+		name string
+		want bool
+	}{
+		{[]string{"x", "y", "--no-open"}, "no-open", true},
+		{[]string{"x", "y", "--no-open=true"}, "no-open", true},
+		{[]string{"x", "y", "--no-open=1"}, "no-open", true},
+		{[]string{"x", "y", "--no-open=false"}, "no-open", false},
+		{[]string{"x", "y", "--no-open=0"}, "no-open", false},
+		{[]string{"x", "y", "--no-open=off"}, "no-open", false},
+		{[]string{"x", "y"}, "no-open", false},
+	}
+	for _, tc := range cases {
+		cmd, err := parseCommand(tc.args)
+		if err != nil {
+			t.Fatalf("parseCommand(%v): %v", tc.args, err)
+		}
+		if got := boolOption(cmd, tc.name); got != tc.want {
+			t.Fatalf("boolOption(%v, %q) = %t, want %t", tc.args, tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestChannelMessagesCompactFalseProducesFullJSON is the end-to-end counterpart:
+// `--compact=false` must emit full JSON, not the compact table.
+func TestChannelMessagesCompactFalseProducesFullJSON(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	picture := strings.Repeat("picture-data", 100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "GET /api/workspaces/workspace-id":
+			writeJSON(t, w, map[string]any{"channels": []map[string]any{{"id": "channel-id", "name": "general"}}, "members": []map[string]any{}})
+		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
+			writeJSON(t, w, map[string]any{"messages": []map[string]any{{
+				"body": "hi", "createdAt": "2026-05-21T12:00:00.000Z", "id": "message-1",
+				"sender": map[string]any{"id": "user:ada", "name": "Ada", "picture": picture},
+			}}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"channel", "messages", "--token", "test-token", "--base-url", server.URL,
+		"--workspace", "test0", "--channel", "general", "--compact=false",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "picture-data") {
+		t.Fatalf("expected full JSON output, got:\n%s", stdout.String())
+	}
+}

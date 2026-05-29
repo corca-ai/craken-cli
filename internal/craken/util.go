@@ -65,7 +65,19 @@ func numberOption(cmd command, name string, fallback int) (int, error) {
 }
 
 func boolOption(cmd command, name string) bool {
-	return cmd.Flags[name] || cmd.string(name, "") != ""
+	if cmd.Flags[name] {
+		return true
+	}
+	// A bare flag (above) is true; an inline value is parsed so `--flag=false`
+	// (which the parser stores in Options, not Flags) is honored as false.
+	switch strings.ToLower(cmd.string(name, "")) {
+	case "":
+		return false
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func stringListOption(cmd command, name string) []string {
