@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -559,5 +560,44 @@ func TestWikiRecentCompactRendersLargeVersionNumberAsDecimal(t *testing.T) {
 	}
 	if got, want := stdout.String(), "2026-05-21T12:00:00.000Z\tAda\tHome\t1234567\n"; got != want {
 		t.Fatalf("unexpected compact wiki output %q", got)
+	}
+}
+
+// TestFileUploadFilenameDoesNotInjectMultipartHeaders pins that a CR/LF in the
+// upload filename cannot inject lines into the multipart part header. Before the
+// fix escapeQuotes left CR/LF intact, so "--name" with \r\n added arbitrary
+// header lines (and a blank line that split the part) into the request body.
+func TestFileUploadFilenameDoesNotInjectMultipartHeaders(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	uploadPath := filepath.Join(t.TempDir(), "payload.bin")
+	if err := os.WriteFile(uploadPath, []byte("FILECONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "POST /api/workspaces/workspace-id/files":
+			capturedBody, _ = io.ReadAll(r.Body)
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	malName := "x\"\r\nX-Injected: evil\r\n\r\nINJECTED"
+	if err := Run(context.Background(), "dev", []string{
+		"file", "upload", "--token", "test-token", "--base-url", server.URL,
+		"--workspace", "test0", "--path", uploadPath, "--name", malName,
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(capturedBody), "\nX-Injected: evil") {
+		t.Fatalf("CR/LF header injection in multipart body:\n%s", capturedBody)
 	}
 }

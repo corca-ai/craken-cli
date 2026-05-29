@@ -221,5 +221,8 @@ func bytesReader(data []byte) io.Reader {
 }
 
 func escapeQuotes(value string) string {
-	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
+	// Strip CR/LF as well as escaping backslash and quote: these values land in a
+	// multipart Content-Disposition header line, so an unescaped CR/LF in a
+	// filename or field name could inject header lines or split the part.
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"", "\r", "", "\n", "").Replace(value)
 }
