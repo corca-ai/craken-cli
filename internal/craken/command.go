@@ -59,9 +59,22 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	case "do":
 		return runDo(ctx, client, cmd, stdout, stdin)
 	case "get", "post", "put", "patch", "delete":
-		return runRawHTTP(ctx, client, cmd.Resource, cmd.Action, cmd, stdout, stdin)
+		// parseCommand defaults a missing action to the "help" sentinel; for raw
+		// verbs the action slot is the path, so drop the sentinel and let the
+		// "expected API path" guard fire instead of requesting /help.
+		path := cmd.Action
+		if path == "help" {
+			path = ""
+		}
+		return runRawHTTP(ctx, client, cmd.Resource, path, cmd, stdout, stdin)
 	case "api":
-		return runRawHTTP(ctx, client, cmd.Action, first(cmd.Positionals, cmd.string("path", "")), cmd.withPositionals(rest(cmd.Positionals)), stdout, stdin)
+		// Likewise, the action slot is the HTTP method here; reject the missing /
+		// sentinel method rather than sending a bogus "HELP" request.
+		method := cmd.Action
+		if method == "" || method == "help" {
+			return fmt.Errorf("expected HTTP method, e.g. craken api GET /path")
+		}
+		return runRawHTTP(ctx, client, method, first(cmd.Positionals, cmd.string("path", "")), cmd.withPositionals(rest(cmd.Positionals)), stdout, stdin)
 	default:
 		return runCatalogCommand(ctx, client, cmd, stdout, stdin)
 	}
