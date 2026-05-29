@@ -312,3 +312,54 @@ func TestWikiSaveContentValueAndFileConflictReportsMutualExclusion(t *testing.T)
 		t.Fatalf("expected mutual-exclusion message, got %q", err.Error())
 	}
 }
+
+// TestCatalogPostCarriesQueryParamsAlongsideBody pins that a POST command that
+// declares both query params and body fields sends both. Before the fix the
+// query values were computed, marked consumed, then dropped on non-GET routes.
+func TestCatalogPostCarriesQueryParamsAlongsideBody(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	var seenQuery string
+	var seenBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/client":
+			writeJSON(t, w, map[string]any{
+				"schemaVersion": 1,
+				"commands": []map[string]any{{
+					"command": "craken thing create", "description": "Create a thing", "group": "Test",
+					"id": "thing.create", "operationId": "things.create",
+					"execution": map[string]any{
+						"operationId": "things.create",
+						"queryParams": map[string]any{"dryRun": map[string]any{"source": "option", "option": "dry-run"}},
+						"bodyFields":  map[string]any{"name": map[string]any{"source": "option", "option": "name", "required": true}},
+					},
+				}},
+				"routes": []map[string]any{{
+					"auth": "required", "description": "Create a thing", "id": "things.create",
+					"method": "POST", "path": "/api/things", "requestBody": "json",
+				}},
+			})
+		case "POST /api/things":
+			seenQuery = r.URL.RawQuery
+			if err := json.NewDecoder(r.Body).Decode(&seenBody); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"thing", "create", "--token", "test-token", "--base-url", server.URL, "--name", "widget", "--dry-run", "true",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenQuery, "dryRun=true") {
+		t.Fatalf("expected dryRun query param, got %q", seenQuery)
+	}
+	if seenBody["name"] != "widget" {
+		t.Fatalf("expected name body field, got %#v", seenBody)
+	}
+}
