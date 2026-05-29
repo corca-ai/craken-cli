@@ -64,6 +64,23 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 				"command":     "craken do custom.operation",
 				"description": "Run the server-provided example",
 			}},
+			"help": map[string]any{
+				"title":   "Example Product",
+				"summary": "Example Product publishes this overview from its API catalog.",
+				"sections": []map[string]any{
+					{
+						"title": "Getting started",
+						"items": []map[string]any{{
+							"command":     "craken custom run --name NAME",
+							"description": "Run a custom product command discovered from the server.",
+						}},
+					},
+					{
+						"title": "Authentication",
+						"body":  "Use the local device login command to store a bearer profile.",
+					},
+				},
+			},
 			"routes": []map[string]any{{
 				"auth":        "required",
 				"description": "Run a custom operation",
@@ -88,6 +105,12 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 	}
 	help := stdout.String()
 	for _, expected := range []string{
+		"Example Product",
+		"Example Product publishes this overview from its API catalog.",
+		"Getting started:",
+		"Run a custom product command discovered from the server.",
+		"Use the local device login command to store a bearer profile.",
+		"Local client commands:",
 		"Server commands:",
 		"Custom:",
 		"craken custom run --name NAME",
@@ -110,11 +133,46 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 		"custom run|inspect",
 		"craken auth login --profile PROFILE",
 		"craken commands --profile PROFILE --format text",
+		"craken auth login --as-agent --workspace WORKSPACE_ID --agent-name",
 		"workspace list|get|create|delete",
 		"workspace|channel|dm|file|folder|wiki|agent|dream",
 	} {
 		if strings.Contains(help, stale) {
 			t.Fatalf("expected help not to hard-code operation list %q, got:\n%s", stale, help)
+		}
+	}
+}
+
+func TestHelpResourceRendersCatalogHelp(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"help": map[string]any{
+				"title":   "Catalog Help",
+				"summary": "Server-owned overview.",
+				"sections": []map[string]any{{
+					"title": "Start",
+					"items": []map[string]any{{"label": "First step", "description": "Read this first."}},
+				}},
+			},
+			"routes":        []map[string]any{},
+			"schemaVersion": 1,
+		})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"help", "--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	help := stdout.String()
+	for _, expected := range []string{"Catalog Help", "Server-owned overview.", "First step", "Read this first."} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("expected help to contain %q, got:\n%s", expected, help)
 		}
 	}
 }
