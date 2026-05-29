@@ -165,14 +165,26 @@ func runHelp(ctx context.Context, cmd command, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if command, route := focusedHelpTarget(cmd, catalog); command != nil {
-		return printFocusedCommandHelp(stdout, *command, route)
+	if command, route := focusedHelpTarget(cmd, catalog); command != nil || route != nil {
+		return printFocusedCommandHelp(stdout, cmd, command, route)
 	}
 	return printCatalogHelp(stdout, catalog)
 }
 
 func focusedHelpTarget(cmd command, catalog clientCatalog) (*cliCommand, *route) {
-	if cmd.Resource == "" || cmd.Action == "" || cmd.Action == "help" {
+	if cmd.Action == "" || cmd.Action == "help" {
+		return nil, nil
+	}
+	// `craken do <operationId> --help` addresses a route by its operation id; the
+	// shortcut command (if any) enriches the help with examples and options.
+	if cmd.Resource == "do" {
+		route := routeByID(catalog.Routes, cmd.Action)
+		if route == nil {
+			return nil, nil
+		}
+		return commandByOperationID(catalog.Commands, cmd.Action), route
+	}
+	if cmd.Resource == "" {
 		return nil, nil
 	}
 	id := cmd.Resource + "." + cmd.Action
@@ -182,6 +194,15 @@ func focusedHelpTarget(cmd command, catalog clientCatalog) (*cliCommand, *route)
 		}
 	}
 	return nil, nil
+}
+
+func commandByOperationID(commands []cliCommand, operationID string) *cliCommand {
+	for i := range commands {
+		if commands[i].OperationID == operationID {
+			return &commands[i]
+		}
+	}
+	return nil
 }
 
 func routeByID(routes []route, id string) *route {
@@ -196,11 +217,13 @@ func routeByID(routes []route, id string) *route {
 	return nil
 }
 
-func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route) error {
-	if _, err := fmt.Fprintf(stdout, "Usage:\n  %s\n\n%s\n", command.Command, command.Description); err != nil {
+func printFocusedCommandHelp(stdout io.Writer, cmd command, command *cliCommand, route *route) error {
+	usage := focusedHelpUsage(cmd, command, route)
+	description := focusedHelpDescription(command, route)
+	if _, err := fmt.Fprintf(stdout, "Usage:\n  %s\n\n%s\n", usage, description); err != nil {
 		return err
 	}
-	if len(command.Examples) > 0 {
+	if command != nil && len(command.Examples) > 0 {
 		if _, err := fmt.Fprint(stdout, "\nExamples:\n"); err != nil {
 			return err
 		}
@@ -210,13 +233,15 @@ func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route)
 			}
 		}
 	}
-	if options := localCommandHelpOptions(command); len(options) > 0 {
-		if _, err := fmt.Fprint(stdout, "\nOptions:\n"); err != nil {
-			return err
-		}
-		for _, option := range options {
-			if _, err := fmt.Fprintf(stdout, "  %s\n", option); err != nil {
+	if command != nil {
+		if options := localCommandHelpOptions(*command); len(options) > 0 {
+			if _, err := fmt.Fprint(stdout, "\nOptions:\n"); err != nil {
 				return err
+			}
+			for _, option := range options {
+				if _, err := fmt.Fprintf(stdout, "  %s\n", option); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -226,7 +251,7 @@ func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route)
 	if _, err := fmt.Fprintf(stdout, "\nOperation:\n  %s\t%s\t%s\n", route.ID, route.Method, route.Path); err != nil {
 		return err
 	}
-	if route.Description != "" && route.Description != command.Description {
+	if route.Description != "" && (command == nil || route.Description != command.Description) {
 		if _, err := fmt.Fprintf(stdout, "  %s\n", route.Description); err != nil {
 			return err
 		}
@@ -249,6 +274,26 @@ func printFocusedCommandHelp(stdout io.Writer, command cliCommand, route *route)
 		}
 	}
 	return nil
+}
+
+func focusedHelpUsage(cmd command, command *cliCommand, route *route) string {
+	if command != nil && command.Command != "" {
+		return command.Command
+	}
+	if route != nil {
+		return fmt.Sprintf("craken do %s [options]", route.ID)
+	}
+	return fmt.Sprintf("craken %s %s", cmd.Resource, cmd.Action)
+}
+
+func focusedHelpDescription(command *cliCommand, route *route) string {
+	if command != nil && command.Description != "" {
+		return command.Description
+	}
+	if route != nil {
+		return route.Description
+	}
+	return ""
 }
 
 func firstCatalogFields(primary []catalogField, fallback []catalogField) []catalogField {
@@ -290,6 +335,13 @@ func fieldDetail(field catalogField) string {
 	}
 	if field.Required {
 		parts = append(parts, "required")
+	}
+	if field.Resolver != nil {
+		label := field.Resolver.Label
+		if label == "" {
+			label = "name"
+		}
+		parts = append(parts, fmt.Sprintf("accepts a %s name or id", label))
 	}
 	if field.Description != "" {
 		parts = append(parts, field.Description)

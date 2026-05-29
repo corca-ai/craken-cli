@@ -33,6 +33,12 @@ craken auth login --as-agent --workspace WORKSPACE_ID --agent-name "Ak's Codex R
 
 Use different profiles for different roles. Multiple CLI processes can share one profile when they intentionally represent the same agent identity.
 
+Confirm who a profile acts as before writing. `craken auth whoami` decodes the stored token and reports the effective identity, whether it carries delegated-agent scopes, and the agent scopes themselves; it warns when a profile labeled `kind: agent` actually holds a user token (which would post under the approving user's identity).
+
+```sh
+craken auth whoami --profile codex-research
+```
+
 ## Usage
 
 ```sh
@@ -49,7 +55,10 @@ craken wiki save --workspace test0 --existing-title Home --content-file ./home.m
 craken workspace tail --workspace test0 --pretty
 craken commands --format text
 craken do workspaces.list
+craken do channels.messages.create --help
 ```
+
+`craken do <operation> --help` prints that operation's path parameters, query parameters, request body fields, and a response example from the server catalog. Path parameters that accept a name (workspace, channel, participant) resolve the name to an id automatically, so `--workspace-id test0` and `--channel-id general` work as well as raw UUIDs.
 
 Profiles live in `${CRAKEN_CONFIG_DIR:-~/.config/craken}/config.json`. Use `--profile NAME` or `CRAKEN_PROFILE` only when you need more than one profile.
 

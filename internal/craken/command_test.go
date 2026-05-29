@@ -3,6 +3,7 @@ package craken
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -672,6 +673,240 @@ func TestAgentDeviceLoginStoresAgentProfileMetadata(t *testing.T) {
 	if !strings.Contains(stderr.String(), "authorize Ak's Codex") {
 		t.Fatalf("expected agent authorization prompt in stderr, got %s", stderr.String())
 	}
+}
+
+func resolverCatalogRoutes() []map[string]any {
+	return []map[string]any{
+		{
+			"auth": "required", "description": "List workspaces", "id": "workspaces.list",
+			"method": "GET", "path": "/api/workspaces", "requestBody": "none",
+		},
+		{
+			"auth": "required", "description": "Read workspace detail", "id": "workspaces.get",
+			"method": "GET", "path": "/api/workspaces/{workspaceId}", "requestBody": "none",
+		},
+		{
+			"auth": "required", "description": "Create a channel message", "id": "channels.messages.create",
+			"method": "POST", "path": "/api/workspaces/{workspaceId}/channels/{channelId}/messages", "requestBody": "json",
+			"pathParams": []map[string]any{
+				{"name": "workspaceId", "type": "string", "required": true, "description": "Workspace id or name from the path.", "resolver": map[string]any{
+					"collectionPath": "workspaces", "label": "workspace", "matchFields": []string{"id", "name"}, "operationId": "workspaces.list", "resultPath": "id",
+				}},
+				{"name": "channelId", "type": "string", "required": true, "description": "Channel id or name from the path.", "resolver": map[string]any{
+					"collectionPath": "channels", "label": "channel", "matchFields": []string{"id", "name"}, "operationId": "workspaces.get", "resultPath": "id", "scope": "workspace",
+				}},
+			},
+			"bodyFields": []map[string]any{
+				{"name": "body", "type": "string", "required": true, "description": "Message body."},
+			},
+		},
+	}
+}
+
+func TestDoOperationHelpRendersFocusedRouteWithResolvers(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{"schemaVersion": 1, "routes": resolverCatalogRoutes()})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"do", "channels.messages.create", "--base-url", server.URL, "--help"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	help := stdout.String()
+	for _, expected := range []string{
+		"craken do channels.messages.create [options]",
+		"Path parameters:",
+		"--workspace-id",
+		"accepts a workspace name or id",
+		"--channel-id",
+		"accepts a channel name or id",
+		"Body fields:",
+		"--body",
+		"channels.messages.create\tPOST\t/api/workspaces/{workspaceId}/channels/{channelId}/messages",
+	} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("expected do help to contain %q, got:\n%s", expected, help)
+		}
+	}
+	if strings.Contains(help, "Server commands:") {
+		t.Fatalf("expected focused do help, got global help:\n%s", help)
+	}
+}
+
+func TestGenericDoResolvesPathParamNames(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	var posted string
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/client":
+			writeJSON(t, w, map[string]any{"schemaVersion": 1, "routes": resolverCatalogRoutes()})
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "ws-uuid", "name": "acme"}}})
+		case "GET /api/workspaces/ws-uuid":
+			writeJSON(t, w, map[string]any{"channels": []map[string]any{{"id": "ch-uuid", "name": "general"}}})
+		case "POST /api/workspaces/ws-uuid/channels/ch-uuid/messages":
+			posted = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"do", "channels.messages.create",
+		"--token", "user-token",
+		"--base-url", server.URL,
+		"--workspace-id", "acme",
+		"--channel-id", "general",
+		"--json", `{"body":"hi"}`,
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if posted != "/api/workspaces/ws-uuid/channels/ch-uuid/messages" {
+		t.Fatalf("expected resolved UUID path, got %q", posted)
+	}
+	if body["body"] != "hi" {
+		t.Fatalf("unexpected posted body %#v", body)
+	}
+}
+
+func TestAuthWhoamiReportsAgentScopesFromToken(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	token := makeSessionToken(t, map[string]any{
+		"email":    "ak@example.com",
+		"provider": "google",
+		"delegatedAgent": map[string]any{
+			"agentId":     "agent-id",
+			"clientKind":  "codex",
+			"workspaceId": "ws-uuid",
+			"scopes":      []string{"channel:write", "dm:write"},
+		},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/me" {
+			t.Fatalf("unexpected whoami path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{"authenticated": true, "user": map[string]any{
+			"email": "ak@example.com", "delegatedAgent": map[string]any{"agentId": "agent-id"},
+		}})
+	}))
+	defer server.Close()
+	cfg := config{Profiles: map[string]profile{"codex": {BaseURL: server.URL, Token: token, Kind: "agent", AgentName: "Codex"}}}
+	if err := writeConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"auth", "whoami", "--profile", "codex"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	for _, expected := range []string{`"actingAs": "agent"`, "channel:write", "dm:write", "agent-id", `"authenticated": true`} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("expected whoami output to contain %q, got:\n%s", expected, out)
+		}
+	}
+}
+
+func TestAuthWhoamiWarnsWhenAgentLabelHoldsUserToken(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	userToken := makeSessionToken(t, map[string]any{"email": "owner@example.com", "provider": "google"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{"authenticated": true, "user": map[string]any{"email": "owner@example.com"}})
+	}))
+	defer server.Close()
+	cfg := config{Profiles: map[string]profile{"claude": {BaseURL: server.URL, Token: userToken, Kind: "agent", AgentName: "Claude"}}}
+	if err := writeConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"auth", "whoami", "--profile", "claude"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"actingAs": "user"`) {
+		t.Fatalf("expected actingAs user, got:\n%s", out)
+	}
+	if !strings.Contains(out, "labeled kind=agent") {
+		t.Fatalf("expected mismatch warning, got:\n%s", out)
+	}
+}
+
+func TestAgentLoginRefusesAgentLabelWhenTokenLacksDelegation(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+	openBrowser = func(string) { t.Fatal("did not expect browser to open") }
+
+	userToken := makeSessionToken(t, map[string]any{"email": "owner@example.com", "provider": "google"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/client/agent-device-authorizations":
+			writeJSON(t, w, map[string]any{
+				"deviceCode": "code", "expiresIn": 30, "interval": 1, "userCode": "AB-12",
+				"verificationUri": serverURL(r) + "/api/client/device",
+			})
+		case "/api/client/agent-device-token":
+			// Server hands back a user-scoped token despite the agent-shaped response.
+			writeJSON(t, w, map[string]any{
+				"agent":     map[string]any{"agentId": "agent-id", "clientKind": "codex", "name": "Codex"},
+				"token":     userToken,
+				"tokenType": "Bearer",
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stderr bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"auth", "login", "--as-agent", "--device-code", "--no-open",
+		"--profile", "codex", "--base-url", server.URL,
+		"--workspace", "ws-uuid", "--agent-name", "Codex", "--client-kind", "codex",
+		"--timeout-ms", "5000",
+	}, strings.NewReader(""), &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prof := cfg.Profiles["codex"]
+	if prof.Token != userToken {
+		t.Fatalf("expected token stored, got %q", prof.Token)
+	}
+	if prof.Kind == "agent" {
+		t.Fatalf("expected profile not labeled agent when token lacks delegated-agent claims")
+	}
+	if !strings.Contains(stderr.String(), "no delegated-agent claims") {
+		t.Fatalf("expected warning about missing delegated-agent claims, got:\n%s", stderr.String())
+	}
+}
+
+func makeSessionToken(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sessionBearerPrefix + base64.RawURLEncoding.EncodeToString(raw) + ".signature"
 }
 
 func TestRawPostReadsJSONFromFile(t *testing.T) {
