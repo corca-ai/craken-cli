@@ -27,12 +27,15 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	if err != nil {
 		return err
 	}
-	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
-		return runHelp(ctx, cmd, stdout)
-	}
-	if cmd.Resource == "version" || cmd.Resource == "--version" || cmd.Resource == "-version" {
+	// `--version` is parsed as a flag (no following value), while `version` and
+	// `-version` arrive as the resource; handle all three before the help path so
+	// the version never falls through to the catalog fetch.
+	if cmd.Flags["version"] || cmd.Resource == "version" || cmd.Resource == "-version" {
 		_, err := fmt.Fprintln(stdout, version)
 		return err
+	}
+	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
+		return runHelp(ctx, cmd, stdout)
 	}
 
 	logger, err := newLogger(cmd.string("log-file", ""))
