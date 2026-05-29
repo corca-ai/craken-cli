@@ -182,3 +182,54 @@ func TestGenericDoSendsExplicitEmptyStringBodyField(t *testing.T) {
 		t.Fatalf("expected empty string body value, got %#v", value)
 	}
 }
+
+// TestUserLoginClearsStaleAgentMetadata pins that re-logging a profile as a user
+// clears any prior agent labeling, so the stored kind always matches the stored
+// token. Before the fix the new user token kept the old kind=agent/agentId,
+// which whoami flags as "writes would post under the user identity, not agent".
+func TestUserLoginClearsStaleAgentMetadata(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+	openBrowser = func(target string) { t.Fatalf("did not expect browser open %s", target) }
+
+	if err := writeConfig(config{Profiles: map[string]profile{"codex": {
+		Kind: "agent", AgentID: "agent-id", AgentName: "Codex", ClientKind: "codex", WorkspaceID: "ws", Token: "old",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/client/device-authorizations":
+			writeJSON(t, w, map[string]any{
+				"deviceCode": "device-code", "expiresIn": 30, "interval": 1, "userCode": "WXYZ-2345",
+				"verificationUri": serverURL(r) + "/api/client/device",
+			})
+		case "/api/client/device-token":
+			writeJSON(t, w, map[string]any{
+				"session": map[string]any{"email": "manual@example.com"}, "token": "fresh-user-token", "tokenType": "Bearer",
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"auth", "login", "--no-open", "--profile", "codex", "--base-url", server.URL, "--timeout-ms", "5000",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Profiles["codex"]
+	if p.Token != "fresh-user-token" {
+		t.Fatalf("expected fresh user token, got %q", p.Token)
+	}
+	if p.Kind == "agent" || p.AgentID != "" || p.AgentName != "" || p.ClientKind != "" || p.WorkspaceID != "" {
+		t.Fatalf("expected agent metadata cleared, got %#v", p)
+	}
+}
