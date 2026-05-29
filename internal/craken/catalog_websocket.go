@@ -62,17 +62,34 @@ func runCatalogWebSocketCommand(
 		return fmt.Errorf("websocket subscription failed for %s: %w", endpoint.String(), err)
 	}
 	defer func() { _ = connection.Close() }()
-	if timeoutMS > 0 {
-		_ = connection.SetReadDeadline(time.Now().Add(time.Duration(timeoutMS) * time.Millisecond))
+	return streamWebSocketMessages(connection, cmd, limit, timeoutMS, stdout)
+}
+
+// wsConn is the minimal websocket connection surface used by the read loop. It
+// is satisfied by *websocket.Conn and faked in tests.
+type wsConn interface {
+	ReadMessage() (int, []byte, error)
+	SetReadDeadline(t time.Time) error
+	WriteControl(messageType int, data []byte, deadline time.Time) error
+}
+
+func streamWebSocketMessages(conn wsConn, cmd command, limit int, timeoutMS int, stdout io.Writer) error {
+	armDeadline := func() {
+		if timeoutMS > 0 {
+			_ = conn.SetReadDeadline(time.Now().Add(time.Duration(timeoutMS) * time.Millisecond))
+		}
 	}
+	armDeadline()
 	seen := 0
 	for {
-		_, message, err := connection.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if timeoutMS > 0 && strings.Contains(strings.ToLower(err.Error()), "timeout") {
 				return nil
 			}
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			// Both a normal (1000) and an orderly server-initiated Going Away
+			// (1001) close terminate the subscription cleanly.
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return nil
 			}
 			return err
@@ -82,9 +99,12 @@ func runCatalogWebSocketCommand(
 		}
 		seen++
 		if limit > 0 && seen >= limit {
-			_ = connection.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "limit"), time.Now().Add(time.Second))
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "limit"), time.Now().Add(time.Second))
 			return nil
 		}
+		// Re-arm the idle timeout after each received message so --timeout-ms is a
+		// per-message idle window rather than a fixed total deadline from connect.
+		armDeadline()
 	}
 }
 

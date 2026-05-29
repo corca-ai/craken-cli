@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // TestVersionFlagPrintsVersionWithoutNetwork pins that every documented version
@@ -559,5 +563,101 @@ func TestWikiRecentCompactRendersLargeVersionNumberAsDecimal(t *testing.T) {
 	}
 	if got, want := stdout.String(), "2026-05-21T12:00:00.000Z\tAda\tHome\t1234567\n"; got != want {
 		t.Fatalf("unexpected compact wiki output %q", got)
+	}
+}
+
+// TestFileUploadFilenameDoesNotInjectMultipartHeaders pins that a CR/LF in the
+// upload filename cannot inject lines into the multipart part header. Before the
+// fix escapeQuotes left CR/LF intact, so "--name" with \r\n added arbitrary
+// header lines (and a blank line that split the part) into the request body.
+func TestFileUploadFilenameDoesNotInjectMultipartHeaders(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	uploadPath := filepath.Join(t.TempDir(), "payload.bin")
+	if err := os.WriteFile(uploadPath, []byte("FILECONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		case "POST /api/workspaces/workspace-id/files":
+			capturedBody, _ = io.ReadAll(r.Body)
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	malName := "x\"\r\nX-Injected: evil\r\n\r\nINJECTED"
+	if err := Run(context.Background(), "dev", []string{
+		"file", "upload", "--token", "test-token", "--base-url", server.URL,
+		"--workspace", "test0", "--path", uploadPath, "--name", malName,
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(capturedBody), "\nX-Injected: evil") {
+		t.Fatalf("CR/LF header injection in multipart body:\n%s", capturedBody)
+	}
+}
+
+// fakeWSConn is a deterministic wsConn: it yields queued messages, then returns
+// closeErr, and counts SetReadDeadline calls so the idle-timeout contract can be
+// asserted without wall-clock timing.
+type fakeWSConn struct {
+	messages  [][]byte
+	readIdx   int
+	closeErr  error
+	deadlines int
+}
+
+func (f *fakeWSConn) ReadMessage() (int, []byte, error) {
+	if f.readIdx < len(f.messages) {
+		msg := f.messages[f.readIdx]
+		f.readIdx++
+		return websocket.TextMessage, msg, nil
+	}
+	return 0, nil, f.closeErr
+}
+
+func (f *fakeWSConn) SetReadDeadline(time.Time) error { f.deadlines++; return nil }
+
+func (f *fakeWSConn) WriteControl(int, []byte, time.Time) error { return nil }
+
+// TestWebSocketIdleTimeoutReArmsDeadline pins that --timeout-ms is a per-message
+// idle window: the read deadline is re-armed after every received message, not
+// set once at connect. Before the fix it was armed once (a fixed total deadline).
+func TestWebSocketIdleTimeoutReArmsDeadline(t *testing.T) {
+	conn := &fakeWSConn{
+		messages: [][]byte{[]byte(`{"n":1}`), []byte(`{"n":2}`), []byte(`{"n":3}`)},
+		closeErr: &websocket.CloseError{Code: websocket.CloseNormalClosure},
+	}
+	cmd := command{Options: map[string]string{}, Flags: map[string]bool{}}
+	if err := streamWebSocketMessages(conn, cmd, 0, 250, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := 1 + len(conn.messages); conn.deadlines != want {
+		t.Fatalf("SetReadDeadline called %d times, want %d (idle timeout must re-arm per message)", conn.deadlines, want)
+	}
+}
+
+// TestWebSocketGoingAwayCloseExitsCleanly pins that an orderly server-initiated
+// close (1001 Going Away) terminates without surfacing an error, like 1000.
+func TestWebSocketGoingAwayCloseExitsCleanly(t *testing.T) {
+	conn := &fakeWSConn{
+		messages: [][]byte{[]byte(`{"hello":"world"}`)},
+		closeErr: &websocket.CloseError{Code: websocket.CloseGoingAway, Text: "bye"},
+	}
+	cmd := command{Options: map[string]string{}, Flags: map[string]bool{}}
+	var stdout bytes.Buffer
+	if err := streamWebSocketMessages(conn, cmd, 0, 0, &stdout); err != nil {
+		t.Fatalf("Going Away close should exit cleanly, got %v", err)
+	}
+	if !strings.Contains(stdout.String(), "hello") {
+		t.Fatalf("expected the delivered message to be printed, got %q", stdout.String())
 	}
 }
