@@ -2,6 +2,7 @@ package craken
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +12,167 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
+
+const sessionBearerPrefix = "craken-session."
+
+// sessionClaims holds the parts of a craken session bearer token that decide who
+// the CLI is acting as. The token is base64url(JSON).signature; decoding the
+// payload is informational only (no signature check) and lets the CLI confirm a
+// profile labeled "agent" really carries delegated-agent scopes.
+type sessionClaims struct {
+	Email          string                `json:"email"`
+	Name           string                `json:"name"`
+	Provider       string                `json:"provider"`
+	DelegatedAgent *delegatedAgentClaims `json:"delegatedAgent"`
+}
+
+type delegatedAgentClaims struct {
+	AgentID     string   `json:"agentId"`
+	ClientKind  string   `json:"clientKind"`
+	Scopes      []string `json:"scopes"`
+	WorkspaceID string   `json:"workspaceId"`
+}
+
+func decodeSessionClaims(token string) (*sessionClaims, bool) {
+	token = trim(token)
+	token = strings.TrimPrefix(token, sessionBearerPrefix)
+	payload, _, found := strings.Cut(token, ".")
+	if !found || payload == "" {
+		return nil, false
+	}
+	if pad := len(payload) % 4; pad != 0 {
+		payload += strings.Repeat("=", 4-pad)
+	}
+	raw, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, false
+	}
+	var claims sessionClaims
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		return nil, false
+	}
+	if claims.Email == "" && claims.DelegatedAgent == nil && claims.Provider == "" {
+		return nil, false
+	}
+	return &claims, true
+}
+
+func whoami(ctx context.Context, cmd command, stdout io.Writer) error {
+	cfg, err := readConfig()
+	if err != nil {
+		return err
+	}
+	name := profileName(cmd)
+	prof := cfg.Profiles[name]
+	token := selectedBearerToken(cmd, prof)
+
+	out := map[string]any{"profile": name}
+	if prof.BaseURL != "" {
+		out["baseUrl"] = prof.BaseURL
+	}
+	if prof.Kind != "" {
+		out["profileKind"] = prof.Kind
+	}
+	warnings := []string{}
+
+	if trim(token) == "" {
+		out["authenticated"] = false
+		out["warnings"] = []string{"no bearer token for this profile; run 'craken auth login'"}
+		return printJSON(stdout, out)
+	}
+
+	claims, decoded := decodeSessionClaims(token)
+	if decoded {
+		identity := map[string]any{}
+		if claims.Email != "" {
+			identity["email"] = claims.Email
+		}
+		if claims.Name != "" {
+			identity["name"] = claims.Name
+		}
+		if claims.Provider != "" {
+			identity["provider"] = claims.Provider
+		}
+		if len(identity) > 0 {
+			out["identity"] = identity
+		}
+		if claims.DelegatedAgent != nil {
+			out["actingAs"] = "agent"
+			agent := map[string]any{}
+			if claims.DelegatedAgent.AgentID != "" {
+				agent["agentId"] = claims.DelegatedAgent.AgentID
+			}
+			if claims.DelegatedAgent.ClientKind != "" {
+				agent["clientKind"] = claims.DelegatedAgent.ClientKind
+			}
+			if claims.DelegatedAgent.WorkspaceID != "" {
+				agent["workspaceId"] = claims.DelegatedAgent.WorkspaceID
+			}
+			if len(claims.DelegatedAgent.Scopes) > 0 {
+				agent["scopes"] = claims.DelegatedAgent.Scopes
+			}
+			out["agent"] = agent
+		} else {
+			out["actingAs"] = "user"
+		}
+		if prof.Kind == "agent" && claims.DelegatedAgent == nil {
+			warnings = append(warnings, "profile is labeled kind=agent but its token carries no delegated-agent claims; writes would post under the user identity, not the agent")
+		}
+	} else {
+		warnings = append(warnings, "token is not a decodable craken session token; cannot verify delegated-agent scopes locally")
+	}
+
+	if server, err := fetchCurrentSession(ctx, cmd); err != nil {
+		warnings = append(warnings, fmt.Sprintf("could not confirm identity with the server: %v", err))
+	} else if server != nil {
+		out["server"] = server
+	}
+
+	if len(warnings) > 0 {
+		out["warnings"] = warnings
+	}
+	return printJSON(stdout, out)
+}
+
+// fetchCurrentSession asks the server who the selected token authenticates as via
+// /api/me, returning a compact view of the authenticated identity.
+func fetchCurrentSession(ctx context.Context, cmd command) (map[string]any, error) {
+	logger, err := newLogger(cmd.string("log-file", ""))
+	if err != nil {
+		return nil, err
+	}
+	defer logger.close()
+	client, err := newClient(cmd, logger)
+	if err != nil {
+		return nil, err
+	}
+	value, err := client.json(ctx, "/api/me")
+	if err != nil {
+		return nil, err
+	}
+	root, ok := value.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	server := map[string]any{}
+	if authenticated, ok := root["authenticated"].(bool); ok {
+		server["authenticated"] = authenticated
+	}
+	if user, ok := root["user"].(map[string]any); ok {
+		if email, ok := user["email"].(string); ok && email != "" {
+			server["email"] = email
+		}
+		if _, ok := user["delegatedAgent"].(map[string]any); ok {
+			server["actingAs"] = "agent"
+		} else {
+			server["actingAs"] = "user"
+		}
+	}
+	return server, nil
+}
 
 var openBrowser = openBrowserDefault
 
@@ -24,6 +184,8 @@ func runAuth(ctx context.Context, cmd command, stdin io.Reader, stdout io.Writer
 	switch cmd.Action {
 	case "login":
 		return login(ctx, cmd, stdout, stderr)
+	case "whoami", "status":
+		return whoami(ctx, cmd, stdout)
 	case "import-token":
 		token, err := requiredTokenOption(cmd, stdin)
 		if err != nil {
@@ -91,11 +253,22 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 	prof.BaseURL = baseURL
 	prof.Token = result.Token
 	if result.Agent != nil {
-		prof.Kind = "agent"
-		prof.AgentID = result.Agent.ID
-		prof.AgentName = result.Agent.Name
-		prof.ClientKind = result.Agent.ClientKind
-		prof.WorkspaceID = result.Agent.WorkspaceID
+		// Only label the profile as an agent when the minted token actually carries
+		// delegated-agent claims. A token that decodes cleanly but lacks them would
+		// silently post under the approving user's identity, so refuse the label and
+		// warn instead. An undecodable token (unknown format) keeps the prior trust.
+		claims, decoded := decodeSessionClaims(result.Token)
+		if decoded && claims.DelegatedAgent == nil {
+			if _, ferr := fmt.Fprintf(stderr, "warning: the authorization response was labeled an agent login, but the returned token carries no delegated-agent claims (delegatedAgent/scopes). Leaving profile %q unlabeled so it is not mistaken for the agent. Run 'craken auth whoami' to inspect.\n", name); ferr != nil {
+				return ferr
+			}
+		} else {
+			prof.Kind = "agent"
+			prof.AgentID = result.Agent.ID
+			prof.AgentName = result.Agent.Name
+			prof.ClientKind = result.Agent.ClientKind
+			prof.WorkspaceID = result.Agent.WorkspaceID
+		}
 	}
 	cfg.Profiles[name] = prof
 	if err := writeConfig(cfg); err != nil {

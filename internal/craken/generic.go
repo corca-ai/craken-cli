@@ -177,11 +177,26 @@ type shortcut struct {
 }
 
 type catalogField struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Required    bool     `json:"required,omitempty"`
-	Values      []string `json:"values,omitempty"`
+	Name        string                `json:"name"`
+	Type        string                `json:"type,omitempty"`
+	Description string                `json:"description,omitempty"`
+	Required    bool                  `json:"required,omitempty"`
+	Values      []string              `json:"values,omitempty"`
+	Resolver    *catalogFieldResolver `json:"resolver,omitempty"`
+}
+
+// catalogFieldResolver describes how a UUID parameter can be addressed by a human
+// name. The server advertises it on route path params so generic callers (do/get)
+// can resolve names, and so help can show that a parameter accepts a name.
+type catalogFieldResolver struct {
+	CollectionPath       string   `json:"collectionPath"`
+	Label                string   `json:"label"`
+	MatchFields          []string `json:"matchFields"`
+	OperationID          string   `json:"operationId"`
+	RequiredResultPrefix string   `json:"requiredResultPrefix,omitempty"`
+	ResultPath           string   `json:"resultPath"`
+	Scope                string   `json:"scope,omitempty"`
+	TrimResultPrefix     string   `json:"trimResultPrefix,omitempty"`
 }
 
 func runCommands(ctx context.Context, client *client, cmd command, stdout io.Writer) error {
@@ -233,7 +248,7 @@ func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, s
 	if selected.Stream == "websocket" {
 		return fmt.Errorf("operation %s is a stream. Use the resource-specific tail command for realtime subscriptions", operationID)
 	}
-	requestPath, spec, err := requestFromDiscoveredRoute(*selected, cmd, stdin)
+	requestPath, spec, err := requestFromDiscoveredRoute(ctx, client, routes, *selected, cmd, stdin)
 	if err != nil {
 		return err
 	}
@@ -346,24 +361,73 @@ func catalogFromValue(value any) (clientCatalog, error) {
 	return catalog, nil
 }
 
-func requestFromDiscoveredRoute(route route, cmd command, stdin io.Reader) (string, requestSpec, error) {
+func catalogFieldIndex(fields []catalogField) map[string]catalogField {
+	index := map[string]catalogField{}
+	for _, field := range fields {
+		index[field.Name] = field
+	}
+	return index
+}
+
+// fieldResolverPlan adapts a route-level field resolver to the command resolver
+// plan executed by resolveCatalogValue. A workspace-scoped resolver lists through
+// the workspace detail operation, so it binds workspaceId from the already
+// resolved path values.
+func fieldResolverPlan(resolver catalogFieldResolver) commandResolverPlan {
+	plan := commandResolverPlan{
+		CollectionPath:       resolver.CollectionPath,
+		Label:                resolver.Label,
+		MatchFields:          resolver.MatchFields,
+		OperationID:          resolver.OperationID,
+		RequiredResultPrefix: resolver.RequiredResultPrefix,
+		ResultPath:           resolver.ResultPath,
+		TrimResultPrefix:     resolver.TrimResultPrefix,
+	}
+	if resolver.Scope == "workspace" {
+		plan.PathParams = map[string]commandBinding{
+			"workspaceId": {Source: commandBindingSourceResolved, Name: "workspaceId", Required: true},
+		}
+	}
+	return plan
+}
+
+func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []route, route route, cmd command, stdin io.Reader) (string, requestSpec, error) {
 	consumed := map[string]bool{}
 	positionals := append([]string{}, cmd.Positionals...)
+	pathFields := catalogFieldIndex(firstCatalogFields(route.PathParams, route.PathParameters))
+	resolved := map[string]string{}
+	var resolveErr error
 	path := pathParamPattern.ReplaceAllStringFunc(route.Path, func(match string) string {
 		name := match[1 : len(match)-1]
 		for _, alias := range optionAliases(name) {
 			consumed[alias] = true
 		}
-		if value, ok := optionValue(cmd, name); ok {
-			return url.PathEscape(value)
+		raw, ok := optionValue(cmd, name)
+		if !ok {
+			if len(positionals) == 0 {
+				return "\x00missing:" + name
+			}
+			raw = positionals[0]
+			positionals = positionals[1:]
 		}
-		if len(positionals) == 0 {
-			return "\x00missing:" + name
+		value := raw
+		// When the catalog advertises a name resolver for this id, accept a human
+		// name and resolve it to a UUID. A value that is already an id matches the
+		// resolver's id field and passes through unchanged.
+		if field, ok := pathFields[name]; ok && field.Resolver != nil && raw != "" && resolveErr == nil {
+			id, err := resolveCatalogValue(ctx, client, routes, fieldResolverPlan(*field.Resolver), raw, resolved)
+			if err != nil {
+				resolveErr = err
+				return ""
+			}
+			value = id
 		}
-		value := positionals[0]
-		positionals = positionals[1:]
+		resolved[name] = value
 		return url.PathEscape(value)
 	})
+	if resolveErr != nil {
+		return "", requestSpec{}, resolveErr
+	}
 	if strings.Contains(path, "\x00missing:") {
 		name := strings.TrimPrefix(path[strings.Index(path, "\x00missing:"):], "\x00missing:")
 		return "", requestSpec{}, fmt.Errorf("expected --%s for %s", kebabCase(name), route.Path)
