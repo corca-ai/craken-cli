@@ -14,8 +14,13 @@ type config struct {
 }
 
 type profile struct {
-	BaseURL string `json:"baseUrl,omitempty"`
-	Token   string `json:"token,omitempty"`
+	AgentID     string `json:"agentId,omitempty"`
+	AgentName   string `json:"agentName,omitempty"`
+	BaseURL     string `json:"baseUrl,omitempty"`
+	ClientKind  string `json:"clientKind,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Token       string `json:"token,omitempty"`
+	WorkspaceID string `json:"workspaceId,omitempty"`
 }
 
 func profileName(cmd command) string {

@@ -548,6 +548,74 @@ func TestDeviceLoginNoOpenPrintsVerificationURL(t *testing.T) {
 	}
 }
 
+func TestAgentDeviceLoginStoresAgentProfileMetadata(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+
+	openBrowser = func(target string) {
+		t.Fatalf("did not expect browser to open %s", target)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/client/agent-device-authorizations":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["workspaceId"] != "workspace-id" || body["agentName"] != "Ak's Codex" || body["clientKind"] != "codex" {
+				t.Fatalf("unexpected agent authorization body %#v", body)
+			}
+			writeJSON(t, w, map[string]any{
+				"deviceCode":              "agent-device-code",
+				"expiresIn":               30,
+				"interval":                1,
+				"userCode":                "AGNT-2345",
+				"verificationUri":         serverURL(r) + "/api/client/device",
+				"verificationUriComplete": serverURL(r) + "/api/client/device?user_code=AGNT-2345",
+			})
+		case "/api/client/agent-device-token":
+			writeJSON(t, w, map[string]any{
+				"agent":     map[string]any{"agentId": "agent-id", "clientKind": "codex", "name": "Ak's Codex"},
+				"session":   map[string]any{"email": "ak@example.com"},
+				"token":     "agent-token",
+				"tokenType": "Bearer",
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stderr bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{
+		"auth", "login",
+		"--as-agent",
+		"--no-open",
+		"--profile", "codex",
+		"--base-url", server.URL,
+		"--workspace", "workspace-id",
+		"--agent-name", "Ak's Codex",
+		"--client-kind", "codex",
+		"--timeout-ms", "5000",
+	}, strings.NewReader(""), &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prof := cfg.Profiles["codex"]
+	if prof.Token != "agent-token" || prof.Kind != "agent" || prof.AgentID != "agent-id" || prof.AgentName != "Ak's Codex" {
+		t.Fatalf("unexpected agent profile %#v", prof)
+	}
+	if !strings.Contains(stderr.String(), "authorize Ak's Codex") {
+		t.Fatalf("expected agent authorization prompt in stderr, got %s", stderr.String())
+	}
+}
+
 func TestRawPostReadsJSONFromFile(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)

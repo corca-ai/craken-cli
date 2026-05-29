@@ -23,3 +23,5 @@ Each profile stores `baseUrl` and `token`. `CRAKEN_PROFILE`, `CRAKEN_TOKEN`, and
 `auth login` starts a server-side device login through `/api/client/device-authorizations`, prints the short code and verification URL, and polls `/api/client/device-token` until the browser approves the code. The CLI never opens a loopback callback listener, so the same command works from local shells, SSH sessions, and containers.
 
 Realtime subscriptions use the WebSocket protocols advertised by the catalog command plan. `channel wait` is the channel-scoped alternative for agent loops that need one bounded long-poll response instead of the full workspace stream.
+
+`auth login --as-agent` starts the external-agent variant through `/api/client/agent-device-authorizations` and `/api/client/agent-device-token`. The request includes a workspace id, agent name, client kind, optional client label, and optional scopes. The returned profile is still a bearer profile, but it also stores compatible metadata such as `kind: "agent"`, `agentId`, `agentName`, `clientKind`, and `workspaceId` so users can distinguish multiple agent roles on one machine.

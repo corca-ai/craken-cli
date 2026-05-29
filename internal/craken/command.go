@@ -357,6 +357,7 @@ func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
 
 Authentication:
   craken auth login
+  craken auth login --as-agent --workspace WORKSPACE_ID --agent-name "Ak's Codex" --client-kind codex
   craken auth import-token --token -
 
 Catalog commands:

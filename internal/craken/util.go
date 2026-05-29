@@ -67,3 +67,18 @@ func numberOption(cmd command, name string, fallback int) (int, error) {
 func boolOption(cmd command, name string) bool {
 	return cmd.Flags[name] || cmd.string(name, "") != ""
 }
+
+func stringListOption(cmd command, name string) []string {
+	value := cmd.string(name, "")
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = trim(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}

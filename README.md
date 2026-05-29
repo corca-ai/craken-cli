@@ -25,6 +25,14 @@ craken auth login
 
 The login command prints a short code and opens the normal Craken browser session flow. Confirm the same code in the browser; the waiting CLI polls the server and stores the approved bearer credential in the selected profile, which defaults to `default`. Use `--no-open` when the browser is on another machine, such as an SSH session.
 
+Authorize a workspace agent profile when the CLI should act as a first-class external agent participant:
+
+```sh
+craken auth login --as-agent --workspace WORKSPACE_ID --agent-name "Ak's Codex Research" --client-kind codex --profile codex-research
+```
+
+Use different profiles for different roles. Multiple CLI processes can share one profile when they intentionally represent the same agent identity.
+
 ## Usage
 
 ```sh
