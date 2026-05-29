@@ -65,12 +65,33 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 	if err != nil {
 		return err
 	}
-	result, err := receiveDeviceLogin(ctx, baseURL, time.Duration(timeoutMS)*time.Millisecond, boolOption(cmd, "no-open"), stderr)
-	if err != nil {
-		return err
+	var result loginResult
+	if boolOption(cmd, "as-agent") {
+		request, err := agentLoginRequestFromCommand(cmd)
+		if err != nil {
+			return err
+		}
+		agentResult, err := receiveAgentDeviceLogin(ctx, baseURL, time.Duration(timeoutMS)*time.Millisecond, request, boolOption(cmd, "no-open"), stderr)
+		if err != nil {
+			return err
+		}
+		result = agentResult
+	} else {
+		userResult, err := receiveDeviceLogin(ctx, baseURL, time.Duration(timeoutMS)*time.Millisecond, boolOption(cmd, "no-open"), stderr)
+		if err != nil {
+			return err
+		}
+		result = userResult
 	}
 	prof.BaseURL = baseURL
 	prof.Token = result.Token
+	if result.Agent != nil {
+		prof.Kind = "agent"
+		prof.AgentID = result.Agent.ID
+		prof.AgentName = result.Agent.Name
+		prof.ClientKind = result.Agent.ClientKind
+		prof.WorkspaceID = result.Agent.WorkspaceID
+	}
 	cfg.Profiles[name] = prof
 	if err := writeConfig(cfg); err != nil {
 		return err
@@ -79,9 +100,17 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 }
 
 type loginResult struct {
+	Agent     *loginAgent
 	Session   any
 	Token     string
 	TokenType string
+}
+
+type loginAgent struct {
+	ClientKind  string
+	ID          string
+	Name        string
+	WorkspaceID string
 }
 
 type deviceAuthorizationResponse struct {
@@ -94,11 +123,26 @@ type deviceAuthorizationResponse struct {
 }
 
 type deviceTokenResponse struct {
-	Error     string `json:"error"`
-	Message   string `json:"message"`
-	Session   any    `json:"session"`
-	Token     string `json:"token"`
-	TokenType string `json:"tokenType"`
+	Agent     *deviceTokenAgent `json:"agent"`
+	Error     string            `json:"error"`
+	Message   string            `json:"message"`
+	Session   any               `json:"session"`
+	Token     string            `json:"token"`
+	TokenType string            `json:"tokenType"`
+}
+
+type deviceTokenAgent struct {
+	AgentID    string `json:"agentId"`
+	ClientKind string `json:"clientKind"`
+	Name       string `json:"name"`
+}
+
+type agentLoginRequest struct {
+	AgentName   string   `json:"agentName"`
+	ClientKind  string   `json:"clientKind"`
+	ClientLabel string   `json:"clientLabel,omitempty"`
+	Scopes      []string `json:"scopes,omitempty"`
+	WorkspaceID string   `json:"workspaceId"`
 }
 
 func receiveDeviceLogin(ctx context.Context, baseURL string, timeout time.Duration, noOpen bool, stderr io.Writer) (loginResult, error) {
@@ -143,6 +187,48 @@ func receiveDeviceLogin(ctx context.Context, baseURL string, timeout time.Durati
 	}
 }
 
+func receiveAgentDeviceLogin(ctx context.Context, baseURL string, timeout time.Duration, request agentLoginRequest, noOpen bool, stderr io.Writer) (loginResult, error) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	authorization, err := startAgentDeviceAuthorization(ctx, httpClient, baseURL, request)
+	if err != nil {
+		return loginResult{}, err
+	}
+	loginURL := firstNonEmpty(authorization.VerificationURIComplete, authorization.VerificationURI)
+	if loginURL == "" {
+		return loginResult{}, fmt.Errorf("agent device login response did not include a verification URL")
+	}
+	if _, err := fmt.Fprintf(stderr, "Open this URL to authorize %s:\n%s\n\nCode: %s\nWaiting for authorization...\n", request.AgentName, loginURL, authorization.UserCode); err != nil {
+		return loginResult{}, err
+	}
+	if !noOpen {
+		openBrowser(loginURL)
+	}
+
+	timeout = shorterPositiveDuration(timeout, time.Duration(authorization.ExpiresIn)*time.Second)
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	pollInterval := time.Duration(maxInt(authorization.Interval, 1)) * time.Second
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		result, pending, err := pollAgentDeviceToken(ctx, httpClient, baseURL, authorization.DeviceCode, request.WorkspaceID)
+		if err != nil {
+			return loginResult{}, err
+		}
+		if !pending {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return loginResult{}, ctx.Err()
+		case <-deadline.C:
+			return loginResult{}, fmt.Errorf("agent browser login timed out after %dms", timeout.Milliseconds())
+		case <-ticker.C:
+		}
+	}
+}
+
 func startDeviceAuthorization(ctx context.Context, httpClient *http.Client, baseURL string) (deviceAuthorizationResponse, error) {
 	var authorization deviceAuthorizationResponse
 	status, raw, err := postPublicJSON(ctx, httpClient, baseURL, "/api/client/device-authorizations", map[string]any{}, &authorization)
@@ -154,6 +240,21 @@ func startDeviceAuthorization(ctx context.Context, httpClient *http.Client, base
 	}
 	if trim(authorization.DeviceCode) == "" || trim(authorization.UserCode) == "" {
 		return deviceAuthorizationResponse{}, fmt.Errorf("device login authorization response was incomplete")
+	}
+	return authorization, nil
+}
+
+func startAgentDeviceAuthorization(ctx context.Context, httpClient *http.Client, baseURL string, request agentLoginRequest) (deviceAuthorizationResponse, error) {
+	var authorization deviceAuthorizationResponse
+	status, raw, err := postPublicJSON(ctx, httpClient, baseURL, "/api/client/agent-device-authorizations", request, &authorization)
+	if err != nil {
+		return deviceAuthorizationResponse{}, err
+	}
+	if status < 200 || status >= 300 {
+		return deviceAuthorizationResponse{}, fmt.Errorf("agent device login authorization failed with %d: %s", status, string(raw))
+	}
+	if trim(authorization.DeviceCode) == "" || trim(authorization.UserCode) == "" {
+		return deviceAuthorizationResponse{}, fmt.Errorf("agent device login authorization response was incomplete")
 	}
 	return authorization, nil
 }
@@ -177,6 +278,47 @@ func pollDeviceToken(ctx context.Context, httpClient *http.Client, baseURL strin
 		return loginResult{}, false, fmt.Errorf("device login token response did not include a token")
 	}
 	return loginResult{Session: token.Session, Token: token.Token, TokenType: firstNonEmpty(token.TokenType, "Bearer")}, false, nil
+}
+
+func pollAgentDeviceToken(ctx context.Context, httpClient *http.Client, baseURL string, deviceCode string, workspaceID string) (loginResult, bool, error) {
+	var token deviceTokenResponse
+	status, raw, err := postPublicJSON(ctx, httpClient, baseURL, "/api/client/agent-device-token", map[string]string{"deviceCode": deviceCode}, &token)
+	if err != nil {
+		return loginResult{}, false, err
+	}
+	if status == http.StatusTooEarly || token.Error == "authorization_pending" {
+		return loginResult{}, true, nil
+	}
+	if status < 200 || status >= 300 {
+		if token.Message != "" {
+			return loginResult{}, false, fmt.Errorf("agent device login failed: %s", token.Message)
+		}
+		return loginResult{}, false, fmt.Errorf("agent device login failed with %d: %s", status, string(raw))
+	}
+	if trim(token.Token) == "" {
+		return loginResult{}, false, fmt.Errorf("agent device login token response did not include a token")
+	}
+	var agent *loginAgent
+	if token.Agent != nil {
+		agent = &loginAgent{ClientKind: token.Agent.ClientKind, ID: token.Agent.AgentID, Name: token.Agent.Name, WorkspaceID: workspaceID}
+	}
+	return loginResult{Agent: agent, Session: token.Session, Token: token.Token, TokenType: firstNonEmpty(token.TokenType, "Bearer")}, false, nil
+}
+
+func agentLoginRequestFromCommand(cmd command) (agentLoginRequest, error) {
+	workspaceID := cmd.string("workspace", cmd.string("workspace-id", ""))
+	agentName := cmd.string("agent-name", "")
+	clientKind := cmd.string("client-kind", "custom")
+	if workspaceID == "" || agentName == "" {
+		return agentLoginRequest{}, fmt.Errorf("--as-agent requires --workspace and --agent-name")
+	}
+	return agentLoginRequest{
+		AgentName:   agentName,
+		ClientKind:  clientKind,
+		ClientLabel: cmd.string("client-label", ""),
+		Scopes:      stringListOption(cmd, "scopes"),
+		WorkspaceID: workspaceID,
+	}, nil
 }
 
 func postPublicJSON(ctx context.Context, httpClient *http.Client, baseURL string, path string, body any, target any) (int, []byte, error) {
