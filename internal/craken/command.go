@@ -27,7 +27,7 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	if err != nil {
 		return err
 	}
-	if cmd.Help || cmd.Resource == "" {
+	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
 		return runHelp(ctx, cmd, stdout)
 	}
 	if cmd.Resource == "version" || cmd.Resource == "--version" || cmd.Resource == "-version" {
@@ -353,19 +353,23 @@ func bindingHelpOptions(bindings map[string]commandBinding) []string {
 }
 
 func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
-	if _, err := fmt.Fprint(stdout, `Craken CLI
+	if catalog.Help != nil {
+		if err := printServerHelp(stdout, *catalog.Help); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprint(stdout, "Client catalog\n"); err != nil {
+		return err
+	}
 
-Authentication:
+	if _, err := fmt.Fprint(stdout, `
+Local client commands:
   craken auth login
-  craken auth login --as-agent --workspace WORKSPACE_ID --agent-name "Ak's Codex" --client-kind codex
   craken auth import-token --token -
-
-Catalog commands:
   craken commands --format text
   craken do OPERATION_ID [options]
   craken get|post|put|patch|delete PATH [options]
 
-Global options:
+Local options:
   --profile NAME           Credential profile. Defaults to CRAKEN_PROFILE or default.
   --token TOKEN            Bearer token override. Defaults to CRAKEN_TOKEN or the selected profile.
   --bearer-token TOKEN     Explicit bearer override when a command has its own --token.
@@ -437,6 +441,43 @@ Generic request options:
 	}
 
 	return nil
+}
+
+func printServerHelp(stdout io.Writer, help catalogHelp) error {
+	if _, err := fmt.Fprintf(stdout, "%s\n", help.Title); err != nil {
+		return err
+	}
+	if trim(help.Summary) != "" {
+		if _, err := fmt.Fprintf(stdout, "\n%s\n", help.Summary); err != nil {
+			return err
+		}
+	}
+	for _, section := range help.Sections {
+		if _, err := fmt.Fprintf(stdout, "\n%s:\n", section.Title); err != nil {
+			return err
+		}
+		if trim(section.Body) != "" {
+			if _, err := fmt.Fprintf(stdout, "  %s\n", section.Body); err != nil {
+				return err
+			}
+		}
+		for _, item := range section.Items {
+			if err := printServerHelpItem(stdout, item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func printServerHelpItem(stdout io.Writer, item catalogHelpItem) error {
+	lead := firstNonEmpty(item.Command, item.Label)
+	if lead == "" {
+		_, err := fmt.Fprintf(stdout, "  %s\n", item.Description)
+		return err
+	}
+	_, err := fmt.Fprintf(stdout, "  %s\n      %s\n", lead, item.Description)
+	return err
 }
 
 type commandGroup struct {

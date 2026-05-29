@@ -36,9 +36,28 @@ type clientCatalog struct {
 	BuildID       string           `json:"buildId"`
 	Commands      []cliCommand     `json:"commands,omitempty"`
 	Examples      []commandExample `json:"examples,omitempty"`
+	Help          *catalogHelp     `json:"help,omitempty"`
 	Routes        []route          `json:"routes"`
 	SchemaVersion int              `json:"schemaVersion"`
 	Shortcuts     []shortcut       `json:"shortcuts,omitempty"`
+}
+
+type catalogHelp struct {
+	Sections []catalogHelpSection `json:"sections,omitempty"`
+	Summary  string               `json:"summary,omitempty"`
+	Title    string               `json:"title"`
+}
+
+type catalogHelpSection struct {
+	Body  string            `json:"body,omitempty"`
+	Items []catalogHelpItem `json:"items,omitempty"`
+	Title string            `json:"title"`
+}
+
+type catalogHelpItem struct {
+	Command     string `json:"command,omitempty"`
+	Description string `json:"description"`
+	Label       string `json:"label,omitempty"`
 }
 
 type cliCommand struct {
@@ -307,6 +326,21 @@ func catalogFromValue(value any) (clientCatalog, error) {
 	for _, shortcut := range catalog.Shortcuts {
 		if trim(shortcut.Resource) == "" || len(shortcut.Actions) == 0 || trim(shortcut.Description) == "" {
 			return clientCatalog{}, fmt.Errorf("invalid shortcut in client command catalog")
+		}
+	}
+	if catalog.Help != nil {
+		if trim(catalog.Help.Title) == "" {
+			return clientCatalog{}, fmt.Errorf("invalid help in client command catalog")
+		}
+		for _, section := range catalog.Help.Sections {
+			if trim(section.Title) == "" {
+				return clientCatalog{}, fmt.Errorf("invalid help section in client command catalog")
+			}
+			for _, item := range section.Items {
+				if trim(item.Description) == "" {
+					return clientCatalog{}, fmt.Errorf("invalid help item in client command catalog")
+				}
+			}
 		}
 	}
 	return catalog, nil
