@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // TestVersionFlagPrintsVersionWithoutNetwork pins that every documented version
@@ -599,5 +602,62 @@ func TestFileUploadFilenameDoesNotInjectMultipartHeaders(t *testing.T) {
 	}
 	if strings.Contains(string(capturedBody), "\nX-Injected: evil") {
 		t.Fatalf("CR/LF header injection in multipart body:\n%s", capturedBody)
+	}
+}
+
+// fakeWSConn is a deterministic wsConn: it yields queued messages, then returns
+// closeErr, and counts SetReadDeadline calls so the idle-timeout contract can be
+// asserted without wall-clock timing.
+type fakeWSConn struct {
+	messages  [][]byte
+	readIdx   int
+	closeErr  error
+	deadlines int
+}
+
+func (f *fakeWSConn) ReadMessage() (int, []byte, error) {
+	if f.readIdx < len(f.messages) {
+		msg := f.messages[f.readIdx]
+		f.readIdx++
+		return websocket.TextMessage, msg, nil
+	}
+	return 0, nil, f.closeErr
+}
+
+func (f *fakeWSConn) SetReadDeadline(time.Time) error { f.deadlines++; return nil }
+
+func (f *fakeWSConn) WriteControl(int, []byte, time.Time) error { return nil }
+
+// TestWebSocketIdleTimeoutReArmsDeadline pins that --timeout-ms is a per-message
+// idle window: the read deadline is re-armed after every received message, not
+// set once at connect. Before the fix it was armed once (a fixed total deadline).
+func TestWebSocketIdleTimeoutReArmsDeadline(t *testing.T) {
+	conn := &fakeWSConn{
+		messages: [][]byte{[]byte(`{"n":1}`), []byte(`{"n":2}`), []byte(`{"n":3}`)},
+		closeErr: &websocket.CloseError{Code: websocket.CloseNormalClosure},
+	}
+	cmd := command{Options: map[string]string{}, Flags: map[string]bool{}}
+	if err := streamWebSocketMessages(conn, cmd, 0, 250, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := 1 + len(conn.messages); conn.deadlines != want {
+		t.Fatalf("SetReadDeadline called %d times, want %d (idle timeout must re-arm per message)", conn.deadlines, want)
+	}
+}
+
+// TestWebSocketGoingAwayCloseExitsCleanly pins that an orderly server-initiated
+// close (1001 Going Away) terminates without surfacing an error, like 1000.
+func TestWebSocketGoingAwayCloseExitsCleanly(t *testing.T) {
+	conn := &fakeWSConn{
+		messages: [][]byte{[]byte(`{"hello":"world"}`)},
+		closeErr: &websocket.CloseError{Code: websocket.CloseGoingAway, Text: "bye"},
+	}
+	cmd := command{Options: map[string]string{}, Flags: map[string]bool{}}
+	var stdout bytes.Buffer
+	if err := streamWebSocketMessages(conn, cmd, 0, 0, &stdout); err != nil {
+		t.Fatalf("Going Away close should exit cleanly, got %v", err)
+	}
+	if !strings.Contains(stdout.String(), "hello") {
+		t.Fatalf("expected the delivered message to be printed, got %q", stdout.String())
 	}
 }
