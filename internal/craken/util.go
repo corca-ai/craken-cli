@@ -32,10 +32,10 @@ func rest(values []string) []string {
 func compact(body map[string]any) map[string]any {
 	out := map[string]any{}
 	for key, value := range body {
+		// Drop only never-provided (nil) values; an explicit empty string is an
+		// intentional value the user set (e.g. --name "" to clear a field) and
+		// must round-trip into the request body.
 		if value == nil {
-			continue
-		}
-		if text, ok := value.(string); ok && text == "" {
 			continue
 		}
 		out[key] = value
@@ -65,7 +65,19 @@ func numberOption(cmd command, name string, fallback int) (int, error) {
 }
 
 func boolOption(cmd command, name string) bool {
-	return cmd.Flags[name] || cmd.string(name, "") != ""
+	if cmd.Flags[name] {
+		return true
+	}
+	// A bare flag (above) is true; an inline value is parsed so `--flag=false`
+	// (which the parser stores in Options, not Flags) is honored as false.
+	switch strings.ToLower(cmd.string(name, "")) {
+	case "":
+		return false
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func stringListOption(cmd command, name string) []string {

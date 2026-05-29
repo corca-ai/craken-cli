@@ -252,6 +252,16 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 	}
 	prof.BaseURL = baseURL
 	prof.Token = result.Token
+	// Reset any prior agent labeling so the stored metadata always matches the
+	// freshly stored token; the block below re-applies it only when this login
+	// actually established a delegated agent. Otherwise a user login (or a
+	// refused agent login) onto a previously agent-stamped profile would leave a
+	// user-scoped token mislabeled as the agent.
+	prof.Kind = ""
+	prof.AgentID = ""
+	prof.AgentName = ""
+	prof.ClientKind = ""
+	prof.WorkspaceID = ""
 	if result.Agent != nil {
 		// Only label the profile as an agent when the minted token actually carries
 		// delegated-agent claims. A token that decodes cleanly but lacks them would

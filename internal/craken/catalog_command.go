@@ -44,7 +44,7 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	case commandTransportHTTP:
 		return runCatalogHTTPCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
 	case commandTransportDownload:
-		return runCatalogDownloadCommand(ctx, client, *selectedRoute, cmd, requestPath, stdout)
+		return runCatalogDownloadCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportMultipart:
 		return runCatalogMultipartCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportWebSocket:
@@ -209,6 +209,12 @@ func catalogHTTPRequest(
 	if route.Method == http.MethodGet || (route.Method == http.MethodDelete && requestBody == "none") || requestBody == "none" {
 		return appendQuery(path, values), spec, nil
 	}
+	// A body method (POST/PATCH/PUT) can still declare query params; append the
+	// resolved query values to the path so a command that combines query params
+	// with a JSON body sends both rather than dropping the query.
+	if plan.QueryParams != nil {
+		path = appendQuery(path, values)
+	}
 	if hasExplicitBody {
 		spec.JSONBody = explicitBody
 		return path, spec, nil
@@ -225,7 +231,14 @@ func catalogHTTPRequest(
 	return path, spec, nil
 }
 
-func runCatalogDownloadCommand(ctx context.Context, client *client, route route, cmd command, path string, stdout io.Writer) error {
+func runCatalogDownloadCommand(ctx context.Context, client *client, routes []route, route route, plan commandExecution, cmd command, path string, resolved map[string]string, consumed map[string]bool, stdout io.Writer) error {
+	if plan.QueryParams != nil {
+		values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed)
+		if err != nil {
+			return err
+		}
+		path = appendQuery(path, values)
+	}
 	response, err := client.raw(ctx, route.Method, path, requestSpec{})
 	if err != nil {
 		return err

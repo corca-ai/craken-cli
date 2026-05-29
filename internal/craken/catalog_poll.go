@@ -28,6 +28,16 @@ func runCatalogPollCommand(
 	if err != nil {
 		return err
 	}
+	// These drive the client-side poll loop only; mark them consumed so the
+	// requestValuesFromOptions fallback (used when the route declares no query
+	// params) never forwards them to the server.
+	for _, alias := range optionAliases(plan.Poll.IntervalOption) {
+		consumed[alias] = true
+	}
+	for _, alias := range optionAliases(plan.Poll.MaxPollsOption) {
+		consumed[alias] = true
+	}
+	consumed["verbose"] = true
 	var last string
 	for index := 0; index < maxPolls; index++ {
 		requestPath, spec, err := catalogHTTPRequest(ctx, client, routes, route, commandExecution{

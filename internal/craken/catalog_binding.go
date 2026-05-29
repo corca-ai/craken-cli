@@ -88,7 +88,10 @@ func catalogBindingValue(
 	case commandBindingSourceText:
 		value, ok, err := textBindingValue(cmd, binding)
 		if err != nil || !ok {
-			if binding.Required && !ok {
+			// Only report the binding as missing when it is genuinely absent
+			// (err == nil); otherwise surface the real error (e.g. the
+			// value/file mutual-exclusion message) instead of masking it.
+			if err == nil && binding.Required && !ok {
 				return nil, false, fmt.Errorf("expected --%s", binding.Option)
 			}
 			return value, ok, err
@@ -307,6 +310,11 @@ func valueString(value any) string {
 		return typed
 	case nil:
 		return ""
+	case float64:
+		// JSON numbers decode to float64; render in plain decimal so large
+		// integers don't come out in scientific notation (e.g. 1234567, not
+		// "1.234567e+06").
+		return strconv.FormatFloat(typed, 'f', -1, 64)
 	default:
 		return fmt.Sprint(typed)
 	}

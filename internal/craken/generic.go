@@ -494,9 +494,12 @@ func requestHeadersFromOptions(cmd command) http.Header {
 
 func jsonBodyFromOptions(cmd command, stdin io.Reader) (any, bool, error) {
 	jsonValue := firstNonEmpty(cmd.string("json", ""), cmd.string("body-json", ""))
-	file := firstNonEmpty(cmd.string("json-file", ""), cmd.string("body-file", ""))
+	// --body-file is intentionally not a generic JSON body source: catalog text
+	// fields (e.g. channel send) bind it as a plaintext fileOption, so the
+	// generic JSON file input is keyed only on --json-file.
+	file := cmd.string("json-file", "")
 	if jsonValue != "" && file != "" {
-		return nil, false, fmt.Errorf("use either --json/--body-json or --json-file/--body-file, not both")
+		return nil, false, fmt.Errorf("use either --json/--body-json or --json-file, not both")
 	}
 	var bytes []byte
 	var err error
@@ -607,7 +610,7 @@ func appendQuery(path string, values map[string]any) string {
 		if value == nil {
 			continue
 		}
-		text := fmt.Sprint(value)
+		text := queryParamString(value)
 		if text != "" {
 			params.Add(key, text)
 		}
@@ -620,6 +623,19 @@ func appendQuery(path string, values map[string]any) string {
 		separator = "&"
 	}
 	return path + separator + params.Encode()
+}
+
+// queryParamString renders a query value for the wire. Composite values (from a
+// type:json binding) are re-encoded as JSON so the server receives valid JSON;
+// scalars keep their plain fmt.Sprint rendering.
+func queryParamString(value any) string {
+	switch value.(type) {
+	case map[string]any, []any:
+		if encoded, err := json.Marshal(value); err == nil {
+			return string(encoded)
+		}
+	}
+	return fmt.Sprint(value)
 }
 
 func optionValue(cmd command, name string) (string, bool) {
