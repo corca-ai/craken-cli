@@ -32,10 +32,10 @@ func rest(values []string) []string {
 func compact(body map[string]any) map[string]any {
 	out := map[string]any{}
 	for key, value := range body {
+		// Drop only never-provided (nil) values; an explicit empty string is an
+		// intentional value the user set (e.g. --name "" to clear a field) and
+		// must round-trip into the request body.
 		if value == nil {
-			continue
-		}
-		if text, ok := value.(string); ok && text == "" {
 			continue
 		}
 		out[key] = value

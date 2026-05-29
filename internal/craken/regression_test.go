@@ -3,6 +3,7 @@ package craken
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -136,5 +137,48 @@ func TestChannelMessagesCompactFalseProducesFullJSON(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "picture-data") {
 		t.Fatalf("expected full JSON output, got:\n%s", stdout.String())
+	}
+}
+
+// TestGenericDoSendsExplicitEmptyStringBodyField pins that a body field the user
+// explicitly set to "" round-trips into the request body. Before the fix
+// compact() dropped empty strings, so `--name ""` sent {} instead of {"name":""}.
+func TestGenericDoSendsExplicitEmptyStringBodyField(t *testing.T) {
+	t.Setenv("CRAKEN_CONFIG_DIR", t.TempDir())
+	var body map[string]any
+	gotPost := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/client":
+			writeJSON(t, w, map[string]any{"schemaVersion": 1, "routes": []map[string]any{{
+				"auth": "required", "description": "Create a thing", "id": "things.create",
+				"method": "POST", "path": "/api/things", "requestBody": "json",
+			}}})
+		case "POST /api/things":
+			gotPost = true
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if err := Run(context.Background(), "dev", []string{
+		"do", "things.create", "--token", "t", "--base-url", server.URL, "--name", "",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !gotPost {
+		t.Fatal("POST /api/things was never reached")
+	}
+	value, ok := body["name"]
+	if !ok {
+		t.Fatalf("expected name key present in body, got %#v", body)
+	}
+	if value != "" {
+		t.Fatalf("expected empty string body value, got %#v", value)
 	}
 }
