@@ -415,7 +415,7 @@ func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []ro
 		// name and resolve it to a UUID. A value that is already an id matches the
 		// resolver's id field and passes through unchanged.
 		if field, ok := pathFields[name]; ok && field.Resolver != nil && raw != "" && resolveErr == nil {
-			id, err := resolveCatalogValue(ctx, client, routes, fieldResolverPlan(*field.Resolver), raw, resolved)
+			id, err := resolveCatalogValue(ctx, client, routes, fieldResolverPlan(*field.Resolver), raw, resolved, name)
 			if err != nil {
 				resolveErr = err
 				return ""

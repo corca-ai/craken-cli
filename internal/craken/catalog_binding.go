@@ -194,7 +194,20 @@ func resolveBoundValue(
 	if binding.Resolver == nil {
 		return value, nil
 	}
-	return resolveCatalogValue(ctx, client, routes, *binding.Resolver, value, resolved)
+	// Name the field being resolved so a failed name->id lookup says which path
+	// param/option failed (e.g. workspaceId vs channelId) instead of just the
+	// resolver label.
+	return resolveCatalogValue(ctx, client, routes, *binding.Resolver, value, resolved, resolverFieldName(binding))
+}
+
+// resolverFieldName picks the most user-facing name for a binding so resolver
+// errors point at the right input. The bound option (or its first alias) is what
+// the user typed; fall back to the resolved name when no option is bound.
+func resolverFieldName(binding commandBinding) string {
+	if names := bindingOptionNames(binding); len(names) > 0 {
+		return names[0]
+	}
+	return binding.Name
 }
 
 func resolveCatalogValue(
@@ -204,6 +217,7 @@ func resolveCatalogValue(
 	plan commandResolverPlan,
 	value string,
 	resolved map[string]string,
+	fieldName string,
 ) (string, error) {
 	route := routeByID(routes, plan.OperationID)
 	if route == nil {
@@ -231,7 +245,7 @@ func resolveCatalogValue(
 		}
 	}
 	if matched == nil {
-		return "", fmt.Errorf("unknown %s: %s", planLabel(plan), value)
+		return "", fmt.Errorf("resolving %s: unknown %s: %s", resolverFieldLabel(fieldName, plan), planLabel(plan), value)
 	}
 	result := valueString(valueAtPath(matched, plan.ResultPath))
 	if plan.RequiredResultPrefix != "" && !strings.HasPrefix(result, plan.RequiredResultPrefix) {
@@ -325,4 +339,14 @@ func planLabel(plan commandResolverPlan) string {
 		return plan.Label
 	}
 	return plan.OperationID
+}
+
+// resolverFieldLabel names the input that failed to resolve. It prefers the
+// caller-supplied field name (the bound option or path param) and falls back to
+// the resolver's own label so the error is never empty.
+func resolverFieldLabel(fieldName string, plan commandResolverPlan) string {
+	if fieldName != "" {
+		return fieldName
+	}
+	return planLabel(plan)
 }

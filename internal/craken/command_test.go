@@ -782,6 +782,46 @@ func TestGenericDoResolvesPathParamNames(t *testing.T) {
 	}
 }
 
+func TestGenericDoResolverErrorNamesFailedField(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/client":
+			writeJSON(t, w, map[string]any{"schemaVersion": 1, "routes": resolverCatalogRoutes()})
+		case "GET /api/workspaces":
+			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "ws-uuid", "name": "acme"}}})
+		case "GET /api/workspaces/ws-uuid":
+			// The workspace has no channel named "missing", so channelId resolution fails.
+			writeJSON(t, w, map[string]any{"channels": []map[string]any{{"id": "ch-uuid", "name": "general"}}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), "dev", []string{
+		"do", "channels.messages.create",
+		"--token", "user-token",
+		"--base-url", server.URL,
+		"--workspace-id", "acme",
+		"--channel-id", "missing",
+		"--json", `{"body":"hi"}`,
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected resolver error for unknown channel")
+	}
+	message := err.Error()
+	// The error must name the field that failed (channelId) so a multi-resolver
+	// command tells the user which input was bad, while keeping the resolver
+	// label and value.
+	for _, expected := range []string{"resolving channelId", "unknown channel: missing"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("expected resolver error to contain %q, got %q", expected, message)
+		}
+	}
+}
+
 func TestAuthWhoamiReportsAgentScopesFromToken(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
