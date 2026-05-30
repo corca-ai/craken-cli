@@ -21,6 +21,15 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	if err != nil {
 		return err
 	}
+	// A bare resource arrives with Action == ""; resolve the server-advertised
+	// default action for the resource, falling back to "help" so an unknown or
+	// default-less resource still renders help instead of dispatching nothing.
+	if cmd.Action == "" {
+		cmd.Action = catalogDefaultAction(catalog.Shortcuts, cmd.Resource)
+		if cmd.Action == "" {
+			cmd.Action = "help"
+		}
+	}
 	serverCommand := catalogCommandByID(catalog.Commands, cmd.Resource+"."+cmd.Action)
 	if serverCommand == nil {
 		return fmt.Errorf("unknown command: %s %s", cmd.Resource, cmd.Action)
@@ -52,6 +61,17 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	default:
 		return fmt.Errorf("unsupported catalog command transport: %s", plan.Transport)
 	}
+}
+
+// catalogDefaultAction returns the server-advertised default action for a
+// resource shortcut, or "" when the resource is unknown or declares no default.
+func catalogDefaultAction(shortcuts []shortcut, resource string) string {
+	for _, s := range shortcuts {
+		if s.Resource == resource {
+			return s.DefaultAction
+		}
+	}
+	return ""
 }
 
 func catalogCommandByID(commands []cliCommand, id string) *cliCommand {

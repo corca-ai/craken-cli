@@ -8,6 +8,8 @@ Wiki saves follow the service's optimistic concurrency contract. Creating a miss
 
 The default help fetches `/api/client` once and renders the server-owned overview, command syntax, descriptions, examples, and operation routes available to the selected bearer session. Operation help such as `craken channel messages --help` focuses on the matching server command when it is present, then augments it with local option knowledge and any route metadata the catalog exposes. Authentication mechanics and generic transport flags stay local bootstrap behavior; product explanation and the product command surface belong to the Worker so API changes do not require a CLI release just to discover or execute new operations.
 
+The binary does not hardcode which action a bare `craken <resource>` runs. When no action is given, the CLI leaves the action empty and resolves it from the catalog shortcut's `defaultAction` field (for example the `workspace` shortcut advertises `list`), falling back to `help` when a resource declares no default. Resolver failures name the field that failed to resolve, so a command that resolves several ids reports which one was unknown.
+
 Message page commands pass cursor options and `--limit` through to the Worker so service-side validation, clamping, and cursor semantics remain the source of truth.
 
 Catalog commands can advertise table output plans. `--compact` emits those server-described columns as tab-separated rows for shell loops, while `--fields` keeps JSON output but projects only the requested dotted paths so scripts can omit large fields such as profile pictures without changing the service response contract.

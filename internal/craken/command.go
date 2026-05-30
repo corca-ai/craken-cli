@@ -59,17 +59,17 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	case "do":
 		return runDo(ctx, client, cmd, stdout, stdin)
 	case "get", "post", "put", "patch", "delete":
-		// parseCommand defaults a missing action to the "help" sentinel; for raw
-		// verbs the action slot is the path, so drop the sentinel and let the
-		// "expected API path" guard fire instead of requesting /help.
+		// For raw verbs the action slot is the path. A bare verb leaves Action ==
+		// "", and `craken get --help` leaves the "help" sentinel; drop the sentinel
+		// so the "expected API path" guard fires instead of requesting /help.
 		path := cmd.Action
 		if path == "help" {
 			path = ""
 		}
 		return runRawHTTP(ctx, client, cmd.Resource, path, cmd, stdout, stdin)
 	case "api":
-		// Likewise, the action slot is the HTTP method here; reject the missing /
-		// sentinel method rather than sending a bogus "HELP" request.
+		// Likewise, the action slot is the HTTP method here; reject a missing or
+		// help-sentinel method rather than sending a bogus "HELP" request.
 		method := cmd.Action
 		if method == "" || method == "help" {
 			return fmt.Errorf("expected HTTP method, e.g. craken api GET /path")
@@ -114,16 +114,12 @@ func parseCommand(args []string) (command, error) {
 			cmd.Positionals = append(cmd.Positionals, current)
 		}
 	}
-	if cmd.Action == "" {
-		if cmd.Help {
-			cmd.Action = "help"
-			return cmd, nil
-		}
-		if cmd.Resource == "workspace" {
-			cmd.Action = "list"
-		} else {
-			cmd.Action = "help"
-		}
+	// A bare resource leaves Action == "" so the catalog can resolve the
+	// resource's declared default action; only the explicit help flag forces the
+	// "help" sentinel here. The catalog dispatch (runCatalogCommand) and the raw
+	// verb / api / do guards all already treat Action == "" correctly.
+	if cmd.Action == "" && cmd.Help {
+		cmd.Action = "help"
 	}
 	return cmd, nil
 }
