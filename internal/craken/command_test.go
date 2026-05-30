@@ -900,6 +900,176 @@ func TestAgentLoginRefusesAgentLabelWhenTokenLacksDelegation(t *testing.T) {
 	}
 }
 
+func TestAuthLoginRejectsSaveTokenProfileFlag(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+	openBrowser = func(string) { t.Fatal("did not expect a login flow to start") }
+
+	// Seed a user credential in default; the rejected flag must leave it untouched.
+	userToken := makeSessionToken(t, map[string]any{"email": "owner@example.com", "provider": "google"})
+	if err := writeConfig(config{Profiles: map[string]profile{"default": {Token: userToken}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Run(context.Background(), "dev", []string{
+		"auth", "login", "--as-agent",
+		"--workspace", "ws", "--agent-name", "Claude",
+		"--save-token-profile", "kait-agent",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error for unsupported --save-token-profile on auth login")
+	}
+	for _, want := range []string{"--save-token-profile", "--profile kait-agent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected guidance %q, got: %v", want, err)
+		}
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Profiles["default"].Token != userToken {
+		t.Fatalf("default credential must be left intact, got %q", cfg.Profiles["default"].Token)
+	}
+	if _, exists := cfg.Profiles["kait-agent"]; exists {
+		t.Fatal("must not create the kait-agent profile the flag was silently ignored into")
+	}
+}
+
+func TestAuthLoginRefusesCrossIdentityOverwrite(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+	openBrowser = func(string) { t.Fatal("did not expect a login flow to start") }
+
+	userToken := makeSessionToken(t, map[string]any{"email": "ak@corca.ai", "provider": "google"})
+	if err := writeConfig(config{Profiles: map[string]profile{"default": {Token: userToken, BaseURL: "https://example.test"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Run(context.Background(), "dev", []string{
+		"auth", "login", "--as-agent", "--no-open",
+		"--workspace", "ws", "--agent-name", "Claude",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected refusal when an agent login would overwrite a user credential")
+	}
+	for _, want := range []string{`profile "default"`, "user (ak@corca.ai)", "logging in as agent", "--force"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got: %v", want, err)
+		}
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Profiles["default"].Token != userToken {
+		t.Fatalf("user token must be preserved on refusal, got %q", cfg.Profiles["default"].Token)
+	}
+}
+
+func TestAuthLoginForceOverwritesAcrossIdentity(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+	openBrowser = func(string) {}
+
+	userToken := makeSessionToken(t, map[string]any{"email": "ak@corca.ai", "provider": "google"})
+	agentToken := makeSessionToken(t, map[string]any{
+		"delegatedAgent": map[string]any{
+			"agentId": "agent-id", "clientKind": "claude_code", "workspaceId": "ws-uuid",
+			"scopes": []string{"channel:write"},
+		},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/client/agent-device-authorizations":
+			writeJSON(t, w, map[string]any{
+				"deviceCode": "code", "expiresIn": 30, "interval": 1, "userCode": "AB-12",
+				"verificationUri": serverURL(r) + "/api/client/device",
+			})
+		case "/api/client/agent-device-token":
+			writeJSON(t, w, map[string]any{
+				"agent":     map[string]any{"agentId": "agent-id", "clientKind": "claude_code", "name": "Claude"},
+				"token":     agentToken,
+				"tokenType": "Bearer",
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	if err := writeConfig(config{Profiles: map[string]profile{"default": {Token: userToken, BaseURL: server.URL}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), "dev", []string{
+		"auth", "login", "--as-agent", "--device-code", "--no-open", "--force",
+		"--base-url", server.URL, "--workspace", "ws-uuid", "--agent-name", "Claude",
+		"--client-kind", "claude_code", "--timeout-ms", "5000",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Profiles["default"].Token != agentToken {
+		t.Fatalf("expected --force to replace the user token with the agent token, got %q", cfg.Profiles["default"].Token)
+	}
+	if cfg.Profiles["default"].Kind != "agent" {
+		t.Fatalf("expected the overwritten profile labeled agent, got %q", cfg.Profiles["default"].Kind)
+	}
+}
+
+func TestAuthLoginAllowsSameIdentityRefresh(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	originalOpen := openBrowser
+	defer func() { openBrowser = originalOpen }()
+	openBrowser = func(string) {}
+
+	oldUser := makeSessionToken(t, map[string]any{"email": "ak@corca.ai", "provider": "google"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/client/device-authorizations":
+			writeJSON(t, w, map[string]any{
+				"deviceCode": "device-code", "expiresIn": 30, "interval": 1, "userCode": "WXYZ-2345",
+				"verificationUri": serverURL(r) + "/api/client/device",
+			})
+		case "/api/client/device-token":
+			writeJSON(t, w, map[string]any{
+				"session": map[string]any{"email": "ak@corca.ai"}, "token": "refreshed-token", "tokenType": "Bearer",
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	if err := writeConfig(config{Profiles: map[string]profile{"default": {Token: oldUser, BaseURL: server.URL}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-logging in as the same identity kind (user over user) is a routine refresh
+	// and must proceed without --force.
+	if err := Run(context.Background(), "dev", []string{
+		"auth", "login", "--no-open", "--base-url", server.URL, "--timeout-ms", "5000",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Profiles["default"].Token != "refreshed-token" {
+		t.Fatalf("expected same-kind refresh to update the token, got %q", cfg.Profiles["default"].Token)
+	}
+}
+
 func makeSessionToken(t *testing.T, payload map[string]any) string {
 	t.Helper()
 	raw, err := json.Marshal(payload)

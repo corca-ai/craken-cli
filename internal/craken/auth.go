@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -212,12 +213,18 @@ func runAuth(ctx context.Context, cmd command, stdin io.Reader, stdout io.Writer
 }
 
 func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer) error {
+	if err := validateLoginOptions(cmd); err != nil {
+		return err
+	}
 	cfg, err := readConfig()
 	if err != nil {
 		return err
 	}
 	name := profileName(cmd)
 	prof := cfg.Profiles[name]
+	if err := guardCredentialOverwrite(cmd, name, prof); err != nil {
+		return err
+	}
 	baseURL := cmd.string("base-url", "")
 	if baseURL == "" {
 		baseURL = prof.BaseURL
@@ -285,6 +292,102 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 		return err
 	}
 	return printJSON(stdout, map[string]any{"profile": name, "session": result.Session, "tokenType": result.TokenType})
+}
+
+// loginSupportedOptions enumerates every flag auth login understands. The flag
+// parser accepts any --flag, so without this an option meant for a different
+// command (e.g. the generic-request --save-token-profile) would be collected and
+// then silently ignored, with the login quietly landing somewhere the caller did
+// not intend. Rejecting unknown flags turns that silent no-op into an error.
+var loginSupportedOptions = map[string]bool{
+	"profile": true, "base-url": true, "timeout-ms": true,
+	"as-agent": true, "no-open": true, "force": true, "log-file": true,
+	"workspace": true, "workspace-id": true, "agent-name": true,
+	"client-kind": true, "client-label": true, "scopes": true,
+	"device-code": true, "no-device-fallback": true, "use-user-profile": true,
+}
+
+func validateLoginOptions(cmd command) error {
+	unsupported := map[string]bool{}
+	for name := range cmd.Options {
+		if !loginSupportedOptions[name] {
+			unsupported[name] = true
+		}
+	}
+	for name := range cmd.Flags {
+		if !loginSupportedOptions[name] {
+			unsupported[name] = true
+		}
+	}
+	if len(unsupported) == 0 {
+		return nil
+	}
+	// --save-token-profile is the common mix-up: it belongs to generic requests
+	// (do/get/post), where it carves a token out of the JSON response into a named
+	// profile. auth login instead picks the destination profile via --profile, so
+	// point the caller there rather than just reporting the flag as unsupported.
+	if unsupported["save-token-profile"] {
+		target := cmd.string("save-token-profile", "NAME")
+		return fmt.Errorf("auth login does not support --save-token-profile; it stores the session under the profile named by --profile (default %q). Did you mean --profile %s?", defaultProfile, target)
+	}
+	names := make([]string, 0, len(unsupported))
+	for name := range unsupported {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return fmt.Errorf("auth login does not support these flags: --%s", strings.Join(names, ", --"))
+}
+
+// guardCredentialOverwrite refuses to replace a profile's stored credential with a
+// different kind of identity (user vs delegated agent) unless --force is given.
+// The destination profile defaults to "default", so an agent login meant for a
+// separate profile would otherwise silently overwrite a user's own session there
+// with no warning and no way to recover the prior token.
+func guardCredentialOverwrite(cmd command, name string, prof profile) error {
+	existingKind, existingLabel := storedTokenIdentity(prof)
+	if existingKind == "" || existingKind == "unknown" {
+		return nil
+	}
+	incoming := incomingLoginKind(cmd)
+	if existingKind == incoming || boolOption(cmd, "force") {
+		return nil
+	}
+	holder := existingKind
+	if existingLabel != "" {
+		holder = fmt.Sprintf("%s (%s)", existingKind, existingLabel)
+	}
+	return fmt.Errorf("profile %q already holds a %s credential; logging in as %s would overwrite it. Re-run with --force to replace it, or pass --profile NAME to store this login under a different profile.", name, holder, incoming)
+}
+
+// incomingLoginKind is the identity this login will establish: a delegated agent
+// session with --as-agent, otherwise the caller's own user session.
+func incomingLoginKind(cmd command) string {
+	if boolOption(cmd, "as-agent") {
+		return "agent"
+	}
+	return "user"
+}
+
+// storedTokenIdentity decodes a profile's current bearer to report whether it
+// holds a user or delegated-agent credential, with a human-readable label. The
+// decoded claims are the source of truth — the stored kind label can drift from
+// the real token (issue #24) — so an undecodable or absent token reports "unknown"
+// / "" and is left untouched rather than guessed at.
+func storedTokenIdentity(prof profile) (kind string, label string) {
+	if trim(prof.Token) == "" {
+		return "", ""
+	}
+	claims, ok := decodeSessionClaims(prof.Token)
+	if !ok {
+		return "unknown", ""
+	}
+	if claims.DelegatedAgent != nil {
+		return "agent", claims.DelegatedAgent.AgentID
+	}
+	if claims.Email != "" {
+		return "user", claims.Email
+	}
+	return "user", claims.Provider
 }
 
 type loginResult struct {
