@@ -356,7 +356,7 @@ func guardCredentialOverwrite(cmd command, name string, prof profile) error {
 	if existingLabel != "" {
 		holder = fmt.Sprintf("%s (%s)", existingKind, existingLabel)
 	}
-	return fmt.Errorf("profile %q already holds a %s credential; logging in as %s would overwrite it. Re-run with --force to replace it, or pass --profile NAME to store this login under a different profile.", name, holder, incoming)
+	return fmt.Errorf("profile %q already holds a %s credential; logging in as %s would overwrite it — re-run with --force to replace it, or pass --profile NAME to store this login under a different profile", name, holder, incoming)
 }
 
 // incomingLoginKind is the identity this login will establish: a delegated agent
