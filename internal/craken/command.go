@@ -444,6 +444,10 @@ Local options:
   --base-url URL           Defaults to CRAKEN_BASE_URL or https://craken.borca.ai.
   --log-file PATH          Optional HTTP step log. No log file is created by default.
 
+Auth login options:
+  --as-agent               Mint a delegated-agent session instead of a user session.
+  --force                  Replace a profile that already holds a different identity.
+
 Generic request options:
   --json JSON              JSON request body. Use - to read from stdin.
   --json-file PATH         JSON request body file.

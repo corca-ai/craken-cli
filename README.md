@@ -33,6 +33,8 @@ craken auth login --as-agent --workspace WORKSPACE_ID --agent-name "Ak's Codex R
 
 Use different profiles for different roles. Multiple CLI processes can share one profile when they intentionally represent the same agent identity.
 
+`auth login` will not silently swap one identity for another. If the destination profile already holds a credential of a different kind — a user session where you are logging in as an agent, or vice versa — the login is refused so an `--as-agent` login can't quietly overwrite your own user session in `default`. Re-run with `--force` to replace it deliberately, or pass `--profile NAME` to store the new login under a separate profile. Flags that `auth login` does not understand (for example the generic-request `--save-token-profile`, whose destination is `--profile` here) are rejected rather than silently ignored.
+
 Confirm who a profile acts as before writing. `craken auth whoami` decodes the stored token and reports the effective identity, whether it carries delegated-agent scopes, and the agent scopes themselves; it warns when a profile labeled `kind: agent` actually holds a user token (which would post under the approving user's identity).
 
 ```sh
