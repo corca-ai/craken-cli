@@ -43,6 +43,58 @@ func TestImportTokenStoresReusableProfile(t *testing.T) {
 	}
 }
 
+// A bare resource (no action token) resolves the server-advertised defaultAction
+// from the catalog shortcut. The workspace shortcut declares defaultAction "list",
+// so `craken workspace` runs workspace.list and hits GET /api/workspaces without
+// the binary hard-coding the workspace resource or its default action.
+func TestBareResourceResolvesCatalogDefaultAction(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	var listedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeTestCatalog(t, w, r) {
+			return
+		}
+		listedPath = r.Method + " " + r.URL.Path
+		writeJSON(t, w, map[string]any{"workspaces": []any{}})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	// A bare resource with no stored credentials still resolves the catalog default
+	// action; the catalog request is anonymous and the list call carries the
+	// explicit --token, mirroring the other token-driven shortcut tests.
+	if err := Run(context.Background(), "dev", []string{"workspace", "--token", "test-token", "--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if listedPath != "GET /api/workspaces" {
+		t.Fatalf("expected bare `workspace` to resolve defaultAction list and GET /api/workspaces, got %q", listedPath)
+	}
+	if !strings.Contains(stdout.String(), "workspaces") {
+		t.Fatalf("expected workspace list JSON, got %s", stdout.String())
+	}
+}
+
+func TestCatalogDefaultAction(t *testing.T) {
+	shortcuts := []shortcut{
+		{Resource: "workspace", Actions: []string{"list", "get"}, DefaultAction: "list", Description: "Workspace shortcuts"},
+		{Resource: "channel", Actions: []string{"messages", "send"}, Description: "Channel shortcuts"},
+	}
+	cases := []struct {
+		resource string
+		want     string
+	}{
+		{resource: "workspace", want: "list"},
+		{resource: "channel", want: ""},
+		{resource: "unknown", want: ""},
+	}
+	for _, tc := range cases {
+		if got := catalogDefaultAction(shortcuts, tc.resource); got != tc.want {
+			t.Fatalf("catalogDefaultAction(%q) = %q, want %q", tc.resource, got, tc.want)
+		}
+	}
+}
+
 func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
@@ -1793,6 +1845,10 @@ func writeTestCatalog(t *testing.T, w http.ResponseWriter, r *http.Request) bool
 			testRoute("folders.create", http.MethodPost, "/api/workspaces/{workspaceId}/folders", "json"),
 		},
 		"schemaVersion": 1,
+		"shortcuts": []map[string]any{
+			{"resource": "workspace", "actions": []string{"list", "get", "accept"}, "defaultAction": "list", "description": "Workspace shortcuts"},
+			{"resource": "channel", "actions": []string{"messages", "send", "wait"}, "description": "Channel shortcuts"},
+		},
 	})
 	return true
 }

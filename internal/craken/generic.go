@@ -171,9 +171,10 @@ type commandExample struct {
 }
 
 type shortcut struct {
-	Actions     []string `json:"actions"`
-	Description string   `json:"description"`
-	Resource    string   `json:"resource"`
+	Actions       []string `json:"actions"`
+	DefaultAction string   `json:"defaultAction,omitempty"`
+	Description   string   `json:"description"`
+	Resource      string   `json:"resource"`
 }
 
 type catalogField struct {
