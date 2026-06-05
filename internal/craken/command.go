@@ -27,6 +27,12 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	if err != nil {
 		return err
 	}
+	logger, err := newLogger(cmd.string("log-file", ""))
+	if err != nil {
+		return err
+	}
+	defer logger.close()
+
 	// `--version` is parsed as a flag (no following value), while `version` and
 	// `-version` arrive as the resource; handle all three before the help path so
 	// the version never falls through to the catalog fetch.
@@ -35,14 +41,8 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 		return err
 	}
 	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
-		return runHelp(ctx, cmd, stdout)
+		return runHelp(ctx, cmd, logger, stdout)
 	}
-
-	logger, err := newLogger(cmd.string("log-file", ""))
-	if err != nil {
-		return err
-	}
-	defer logger.close()
 
 	if cmd.Resource == "auth" {
 		return runAuth(ctx, cmd, stdin, stdout, stderr)
@@ -158,13 +158,7 @@ func (cmd command) withPositionals(positionals []string) command {
 	return cmd
 }
 
-func runHelp(ctx context.Context, cmd command, stdout io.Writer) error {
-	logger, err := newLogger(cmd.string("log-file", ""))
-	if err != nil {
-		return err
-	}
-	defer logger.close()
-
+func runHelp(ctx context.Context, cmd command, logger *logger, stdout io.Writer) error {
 	client, err := newCatalogClient(cmd, logger)
 	if err != nil {
 		return err
