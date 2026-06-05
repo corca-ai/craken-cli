@@ -2,14 +2,11 @@ package craken
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout io.Writer, stdin io.Reader) error {
@@ -75,9 +72,14 @@ func catalogDefaultAction(shortcuts []shortcut, resource string) string {
 }
 
 func catalogCommandByID(commands []cliCommand, id string) *cliCommand {
-	for i := range commands {
-		if commands[i].ID == id {
-			return &commands[i]
+	return findInSlice(commands, func(c cliCommand) bool { return c.ID == id })
+}
+
+// findInSlice returns a pointer to the first element matching pred, or nil.
+func findInSlice[T any](items []T, pred func(T) bool) *T {
+	for i := range items {
+		if pred(items[i]) {
+			return &items[i]
 		}
 	}
 	return nil
@@ -135,28 +137,26 @@ func isEmptyMultipartPlan(plan commandMultipartPlan) bool {
 func catalogCommandPath(ctx context.Context, client *client, routes []route, route route, plan commandExecution, cmd command) (string, map[string]string, map[string]bool, error) {
 	consumed := map[string]bool{}
 	resolved := map[string]string{}
-	path := pathParamPattern.ReplaceAllStringFunc(route.Path, func(match string) string {
-		name := match[1 : len(match)-1]
+	path, missing, err := expandPathParams(route.Path, func(name string) (string, bool, error) {
 		binding := plan.PathParams[name]
 		if binding.Source == "" {
-			return "\x00missing:" + name
+			return "", false, nil
 		}
 		value, err := catalogBindingString(ctx, client, routes, cmd, binding, resolved, consumed)
 		if err != nil {
-			return "\x00error:" + err.Error()
+			return "", false, err
 		}
 		if value == "" {
-			return "\x00missing:" + name
+			return "", false, nil
 		}
 		resolved[name] = value
-		return url.PathEscape(value)
+		return value, true, nil
 	})
-	if strings.Contains(path, "\x00error:") {
-		return "", nil, nil, errors.New(strings.TrimPrefix(path[strings.Index(path, "\x00error:"):], "\x00error:"))
+	if err != nil {
+		return "", nil, nil, err
 	}
-	if strings.Contains(path, "\x00missing:") {
-		name := strings.TrimPrefix(path[strings.Index(path, "\x00missing:"):], "\x00missing:")
-		return "", nil, nil, fmt.Errorf("expected --%s for %s", kebabCase(name), route.Path)
+	if missing != "" {
+		return "", nil, nil, fmt.Errorf("expected --%s for %s", kebabCase(missing), route.Path)
 	}
 	return path, resolved, consumed, nil
 }

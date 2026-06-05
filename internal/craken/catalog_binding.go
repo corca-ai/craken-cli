@@ -268,29 +268,53 @@ func catalogResolverPath(
 	pathParams map[string]commandBinding,
 	resolved map[string]string,
 ) (string, error) {
-	path := pathParamPattern.ReplaceAllStringFunc(route.Path, func(match string) string {
-		name := match[1 : len(match)-1]
+	path, missing, err := expandPathParams(route.Path, func(name string) (string, bool, error) {
 		binding := pathParams[name]
 		if binding.Source == "" {
-			return "\x00missing:" + name
+			return "", false, nil
 		}
 		value, err := catalogBindingString(ctx, client, routes, command{}, binding, resolved, map[string]bool{})
 		if err != nil {
-			return "\x00error:" + err.Error()
+			return "", false, err
 		}
 		if value == "" {
+			return "", false, nil
+		}
+		return value, true, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if missing != "" {
+		return "", fmt.Errorf("resolver %s requires path binding %s", route.ID, missing)
+	}
+	return path, nil
+}
+
+// expandPathParams substitutes {name} placeholders in routePath using resolve,
+// which reports (value, ok, err) per placeholder — ok==false marks a missing
+// binding. ReplaceAllStringFunc can't surface errors directly, so resolution
+// failures and missing bindings are smuggled out as sentinel-prefixed segments
+// and decoded afterward. Exactly one of (path, missing, err) is meaningful.
+func expandPathParams(routePath string, resolve func(name string) (string, bool, error)) (string, string, error) {
+	encoded := pathParamPattern.ReplaceAllStringFunc(routePath, func(match string) string {
+		name := match[1 : len(match)-1]
+		value, ok, resolveErr := resolve(name)
+		if resolveErr != nil {
+			return "\x00error:" + resolveErr.Error()
+		}
+		if !ok {
 			return "\x00missing:" + name
 		}
 		return url.PathEscape(value)
 	})
-	if strings.Contains(path, "\x00error:") {
-		return "", fmt.Errorf("%s", strings.TrimPrefix(path[strings.Index(path, "\x00error:"):], "\x00error:"))
+	if i := strings.Index(encoded, "\x00error:"); i >= 0 {
+		return "", "", fmt.Errorf("%s", strings.TrimPrefix(encoded[i:], "\x00error:"))
 	}
-	if strings.Contains(path, "\x00missing:") {
-		name := strings.TrimPrefix(path[strings.Index(path, "\x00missing:"):], "\x00missing:")
-		return "", fmt.Errorf("resolver %s requires path binding %s", route.ID, name)
+	if i := strings.Index(encoded, "\x00missing:"); i >= 0 {
+		return "", strings.TrimPrefix(encoded[i:], "\x00missing:"), nil
 	}
-	return path, nil
+	return encoded, "", nil
 }
 
 func matchesCatalogResolverItem(item any, fields []string, value string) bool {

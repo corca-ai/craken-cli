@@ -118,11 +118,10 @@ func TestChannelMessagesCompactFalseProducesFullJSON(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{"channels": []map[string]any{{"id": "channel-id", "name": "general"}}, "members": []map[string]any{}}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{"channels": []map[string]any{{"id": "channel-id", "name": "general"}}, "members": []map[string]any{}})
 		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
 			writeJSON(t, w, map[string]any{"messages": []map[string]any{{
 				"body": "hi", "createdAt": "2026-05-21T12:00:00.000Z", "id": "message-1",
@@ -256,11 +255,10 @@ func TestChannelSendBodyFileReadsPlaintext(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{"channels": []map[string]any{{"id": "channel-id", "name": "general"}}, "members": []map[string]any{}}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{"channels": []map[string]any{{"id": "channel-id", "name": "general"}}, "members": []map[string]any{}})
 		case "POST /api/workspaces/workspace-id/channels/channel-id/messages":
 			gotPost = true
 			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
