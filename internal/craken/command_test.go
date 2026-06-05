@@ -1207,14 +1207,13 @@ func TestChannelSendResolvesWorkspaceChannelAndSender(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{
+			"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+			"members":  []map[string]any{},
+		}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{
-				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
-				"members":  []map[string]any{},
-			})
 		case "POST /api/workspaces/workspace-id/channels/channel-id/messages":
 			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
 				t.Fatal(err)
@@ -1252,14 +1251,13 @@ func TestMessageCommandsSendLimitQuery(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{
+			"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+			"members":  []map[string]any{{"id": "participant-id", "kind": "agent", "name": "orca"}},
+		}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{
-				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
-				"members":  []map[string]any{{"id": "participant-id", "kind": "agent", "name": "orca"}},
-			})
 		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
 			seenChannel = true
 			if got := r.URL.Query().Get("after"); got != "message-1" {
@@ -1315,14 +1313,13 @@ func TestChannelMessagesCompactOutputOmitsPictures(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{
+			"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+			"members":  []map[string]any{},
+		}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{
-				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
-				"members":  []map[string]any{},
-			})
 		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
 			writeJSON(t, w, map[string]any{
 				"messages": []map[string]any{{
@@ -1369,14 +1366,13 @@ func TestDMMessagesFieldsProjectNestedJSON(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{
+			"channels": []map[string]any{},
+			"members":  []map[string]any{{"id": "participant-id", "kind": "agent", "name": "orca"}},
+		}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{
-				"channels": []map[string]any{},
-				"members":  []map[string]any{{"id": "participant-id", "kind": "agent", "name": "orca"}},
-			})
 		case "GET /api/workspaces/workspace-id/direct-messages/participant-id/messages":
 			writeJSON(t, w, map[string]any{
 				"messages": []map[string]any{{
@@ -1475,14 +1471,13 @@ func TestMessageLimitServiceValidationIsPreserved(t *testing.T) {
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{
+			"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+			"members":  []map[string]any{},
+		}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{
-				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
-				"members":  []map[string]any{},
-			})
 		case "GET /api/workspaces/workspace-id/channels/channel-id/messages":
 			if got := r.URL.Query().Get("limit"); got != "0" {
 				t.Fatalf("unexpected limit query %q", got)
@@ -1518,14 +1513,13 @@ func TestChannelWaitResolvesWorkspaceChannelAndPrintsWaitResponse(t *testing.T) 
 		if writeTestCatalog(t, w, r) {
 			return
 		}
+		if writeWorkspaceLookup(t, w, r, map[string]any{
+			"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
+			"members":  []map[string]any{},
+		}) {
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/workspaces":
-			writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
-		case "GET /api/workspaces/workspace-id":
-			writeJSON(t, w, map[string]any{
-				"channels": []map[string]any{{"id": "channel-id", "name": "general"}},
-				"members":  []map[string]any{},
-			})
 		case "GET /api/workspaces/workspace-id/channels/channel-id/messages/wait":
 			if got := r.URL.Query().Get("after"); got != "message-1" {
 				t.Fatalf("unexpected after query %q", got)
@@ -1742,6 +1736,23 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// writeWorkspaceLookup answers the standard workspace list + detail requests
+// that the channel/DM message tests share, returning true once it has handled
+// the request. The detail body (channels/members) varies per test, so callers
+// supply it; the list response is the common workspace-id/test0 fixture.
+func writeWorkspaceLookup(t *testing.T, w http.ResponseWriter, r *http.Request, detail map[string]any) bool {
+	t.Helper()
+	switch r.Method + " " + r.URL.Path {
+	case "GET /api/workspaces":
+		writeJSON(t, w, map[string]any{"workspaces": []map[string]any{{"id": "workspace-id", "name": "test0"}}})
+		return true
+	case "GET /api/workspaces/workspace-id":
+		writeJSON(t, w, detail)
+		return true
+	}
+	return false
 }
 
 func writeTestCatalog(t *testing.T, w http.ResponseWriter, r *http.Request) bool {

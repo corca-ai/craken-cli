@@ -453,29 +453,9 @@ func receiveDeviceLogin(ctx context.Context, baseURL string, timeout time.Durati
 		openBrowser(loginURL)
 	}
 
-	timeout = shorterPositiveDuration(timeout, time.Duration(authorization.ExpiresIn)*time.Second)
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	pollInterval := time.Duration(maxInt(authorization.Interval, 1)) * time.Second
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	for {
-		result, pending, err := pollDeviceToken(ctx, httpClient, baseURL, authorization.DeviceCode)
-		if err != nil {
-			return loginResult{}, err
-		}
-		if !pending {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return loginResult{}, ctx.Err()
-		case <-deadline.C:
-			return loginResult{}, fmt.Errorf("browser login timed out after %dms", timeout.Milliseconds())
-		case <-ticker.C:
-		}
-	}
+	return awaitDeviceLogin(ctx, timeout, authorization, "browser login", func() (loginResult, bool, error) {
+		return pollDeviceToken(ctx, httpClient, baseURL, authorization.DeviceCode)
+	})
 }
 
 func receiveAgentDeviceLogin(ctx context.Context, baseURL string, timeout time.Duration, request agentLoginRequest, noOpen bool, stderr io.Writer) (loginResult, error) {
@@ -495,6 +475,16 @@ func receiveAgentDeviceLogin(ctx context.Context, baseURL string, timeout time.D
 		openBrowser(loginURL)
 	}
 
+	return awaitDeviceLogin(ctx, timeout, authorization, "agent browser login", func() (loginResult, bool, error) {
+		return pollAgentDeviceToken(ctx, httpClient, baseURL, authorization.DeviceCode, request.WorkspaceID)
+	})
+}
+
+// awaitDeviceLogin runs the shared OAuth device-flow poll loop: it bounds the
+// timeout to the authorization's expiry, polls at the server-advertised
+// interval, and returns once the token resolves, the deadline passes, or the
+// context is cancelled. poll reports (result, pending, err) per attempt.
+func awaitDeviceLogin(ctx context.Context, timeout time.Duration, authorization deviceAuthorizationResponse, timeoutLabel string, poll func() (loginResult, bool, error)) (loginResult, error) {
 	timeout = shorterPositiveDuration(timeout, time.Duration(authorization.ExpiresIn)*time.Second)
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -503,7 +493,7 @@ func receiveAgentDeviceLogin(ctx context.Context, baseURL string, timeout time.D
 	defer ticker.Stop()
 
 	for {
-		result, pending, err := pollAgentDeviceToken(ctx, httpClient, baseURL, authorization.DeviceCode, request.WorkspaceID)
+		result, pending, err := poll()
 		if err != nil {
 			return loginResult{}, err
 		}
@@ -514,7 +504,7 @@ func receiveAgentDeviceLogin(ctx context.Context, baseURL string, timeout time.D
 		case <-ctx.Done():
 			return loginResult{}, ctx.Err()
 		case <-deadline.C:
-			return loginResult{}, fmt.Errorf("agent browser login timed out after %dms", timeout.Milliseconds())
+			return loginResult{}, fmt.Errorf("%s timed out after %dms", timeoutLabel, timeout.Milliseconds())
 		case <-ticker.C:
 		}
 	}

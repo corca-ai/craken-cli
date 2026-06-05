@@ -203,24 +203,14 @@ func focusedHelpTarget(cmd command, catalog clientCatalog) (*cliCommand, *route)
 }
 
 func commandByOperationID(commands []cliCommand, operationID string) *cliCommand {
-	for i := range commands {
-		if commands[i].OperationID == operationID {
-			return &commands[i]
-		}
-	}
-	return nil
+	return findInSlice(commands, func(c cliCommand) bool { return c.OperationID == operationID })
 }
 
 func routeByID(routes []route, id string) *route {
 	if id == "" {
 		return nil
 	}
-	for i := range routes {
-		if routes[i].ID == id {
-			return &routes[i]
-		}
-	}
-	return nil
+	return findInSlice(routes, func(r route) bool { return r.ID == id })
 }
 
 func printFocusedCommandHelp(stdout io.Writer, cmd command, command *cliCommand, route *route) error {
