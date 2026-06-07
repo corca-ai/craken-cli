@@ -174,6 +174,14 @@ func runHelp(ctx context.Context, cmd command, logger *logger, stdout io.Writer)
 	if command, route := focusedHelpTarget(cmd, catalog); command != nil || route != nil {
 		return printFocusedCommandHelp(stdout, cmd, command, route)
 	}
+	// The default overview stays compact and state-aware; the full reference and
+	// the machine-readable guidance are opt-in so neither buries the other.
+	if cmd.string("format", "") == "json" || boolOption(cmd, "json") {
+		return printCatalogHelpJSON(stdout, catalog)
+	}
+	if boolOption(cmd, "verbose") || boolOption(cmd, "all") {
+		return printVerboseCatalogHelp(stdout, catalog)
+	}
 	return printCatalogHelp(stdout, catalog)
 }
 
@@ -400,7 +408,175 @@ func bindingHelpOptions(bindings map[string]commandBinding) []string {
 	return options
 }
 
+// printCatalogHelp renders the default, compact, state-aware overview: what
+// Craken is, the current auth status, the server-recommended next steps, a
+// grouped command summary, and pointers to the fuller views. The server owns all
+// the state-specific content (auth/nextSteps/help); the CLI only lays it out.
 func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
+	title := "Craken"
+	summary := ""
+	if catalog.Help != nil {
+		if trim(catalog.Help.Title) != "" {
+			title = catalog.Help.Title
+		}
+		summary = catalog.Help.Summary
+	}
+	if _, err := fmt.Fprintf(stdout, "%s\n", title); err != nil {
+		return err
+	}
+	if trim(summary) != "" {
+		if _, err := fmt.Fprintf(stdout, "%s\n", summary); err != nil {
+			return err
+		}
+	}
+
+	if line := authStatusLine(catalog.Auth); line != "" {
+		if _, err := fmt.Fprintf(stdout, "\n%s\n", line); err != nil {
+			return err
+		}
+	}
+
+	if err := printNextSteps(stdout, catalog); err != nil {
+		return err
+	}
+
+	if summaries := groupedCommandSummaries(catalog.Commands); len(summaries) > 0 {
+		if _, err := fmt.Fprint(stdout, "\nServer commands:\n"); err != nil {
+			return err
+		}
+		for _, line := range summaries {
+			if _, err := fmt.Fprintf(stdout, "  %s\n", line); err != nil {
+				return err
+			}
+		}
+	}
+
+	_, err := fmt.Fprint(stdout, `
+More:
+  craken commands            List every command available to this profile.
+  craken <command> --help    Show one command's options and parameters.
+  craken help --verbose      Full reference: every command, route, and local flag.
+  craken help --format json  Structured guidance (auth, nextSteps) for coding agents.
+`)
+	return err
+}
+
+// authStatusLine turns the server-provided auth block into one human line. An
+// absent block (older server) yields no line so the overview degrades cleanly.
+func authStatusLine(auth *catalogAuth) string {
+	if auth == nil {
+		return ""
+	}
+	switch auth.Status {
+	case "user":
+		if auth.Identity != nil && trim(auth.Identity.Email) != "" {
+			return fmt.Sprintf("Logged in as %s.", auth.Identity.Email)
+		}
+		return "Logged in."
+	case "agent":
+		workspace := ""
+		if auth.Agent != nil {
+			workspace = auth.Agent.WorkspaceID
+		}
+		owner := ""
+		if auth.Identity != nil {
+			owner = auth.Identity.Email
+		}
+		switch {
+		case workspace != "" && owner != "":
+			return fmt.Sprintf("Acting as a delegated agent in workspace %s (owner %s).", workspace, owner)
+		case workspace != "":
+			return fmt.Sprintf("Acting as a delegated agent in workspace %s.", workspace)
+		default:
+			return "Acting as a delegated agent."
+		}
+	default:
+		return "Not logged in. Run 'craken auth login' to get started."
+	}
+}
+
+// printNextSteps renders the server-recommended actions. When the catalog omits
+// them (older server), it falls back to a single sensible hint derived from the
+// auth status so the user is never left without a next action.
+func printNextSteps(stdout io.Writer, catalog clientCatalog) error {
+	steps := catalog.NextSteps
+	if len(steps) == 0 {
+		steps = fallbackNextSteps(catalog.Auth)
+	}
+	if len(steps) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprint(stdout, "\nNext steps:\n"); err != nil {
+		return err
+	}
+	for index, step := range steps {
+		if _, err := fmt.Fprintf(stdout, "  %d. %s\n", index+1, step.Command); err != nil {
+			return err
+		}
+		if trim(step.Description) != "" {
+			if _, err := fmt.Fprintf(stdout, "       %s\n", step.Description); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func fallbackNextSteps(auth *catalogAuth) []catalogNextStep {
+	if auth != nil && (auth.Status == "user" || auth.Status == "agent") {
+		return []catalogNextStep{{Command: "craken workspace list", Description: "List the workspaces you can act in."}}
+	}
+	return []catalogNextStep{{Command: "craken auth login", Description: "Log in through your browser to get started."}}
+}
+
+// groupedCommandSummaries collapses each command group to a single
+// "Group: action1, action2" line for the compact overview.
+func groupedCommandSummaries(commands []cliCommand) []string {
+	lines := []string{}
+	for _, group := range groupedCommands(commands) {
+		actions := []string{}
+		for _, command := range group.Commands {
+			if _, action, found := strings.Cut(command.ID, "."); found && action != "" {
+				actions = append(actions, action)
+			}
+		}
+		if len(actions) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", group.Name, strings.Join(actions, ", ")))
+	}
+	return lines
+}
+
+// printCatalogHelpJSON emits the state-aware guidance as JSON for coding agents:
+// the identity (auth) and the recommended next steps, plus the one-line summary.
+func printCatalogHelpJSON(stdout io.Writer, catalog clientCatalog) error {
+	out := map[string]any{"nextSteps": nextStepsForJSON(catalog)}
+	if catalog.Auth != nil {
+		out["auth"] = catalog.Auth
+	}
+	if catalog.Help != nil {
+		if trim(catalog.Help.Title) != "" {
+			out["title"] = catalog.Help.Title
+		}
+		if trim(catalog.Help.Summary) != "" {
+			out["summary"] = catalog.Help.Summary
+		}
+	}
+	return printJSON(stdout, out)
+}
+
+func nextStepsForJSON(catalog clientCatalog) []catalogNextStep {
+	if len(catalog.NextSteps) > 0 {
+		return catalog.NextSteps
+	}
+	return fallbackNextSteps(catalog.Auth)
+}
+
+// printVerboseCatalogHelp is the full reference: the complete server help, the
+// local bootstrap commands and flags, every server command with its description
+// and examples, and every advertised operation route.
+func printVerboseCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
 	if catalog.Help != nil {
 		if err := printServerHelp(stdout, *catalog.Help); err != nil {
 			return err

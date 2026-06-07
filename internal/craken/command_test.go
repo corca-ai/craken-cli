@@ -157,22 +157,18 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := stdout.String()
+	// The default overview is compact: title, summary, the (fallback) next step,
+	// a grouped command summary, and pointers to the fuller views.
 	for _, expected := range []string{
 		"Example Product",
 		"Example Product publishes this overview from its API catalog.",
-		"Getting started:",
-		"Run a custom product command discovered from the server.",
-		"Use the local device login command to store a bearer profile.",
-		"Local client commands:",
-		"Server commands:",
-		"Custom:",
-		"craken custom run --name NAME",
-		"Run the server-provided command",
-		"e.g. craken custom run --name demo",
-		"custom.operation\tPOST\t/api/custom\tRun a custom operation",
-		"craken do OPERATION_ID",
+		"Next steps:",
 		"craken auth login",
-		"craken commands --format text",
+		"Server commands:",
+		"Custom: run",
+		"craken commands",
+		"craken help --verbose",
+		"craken help --format json",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("expected help to contain %q, got:\n%s", expected, help)
@@ -181,17 +177,21 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 	if seenAuthorization != "" {
 		t.Fatalf("expected anonymous catalog request, got auth %q", seenAuthorization)
 	}
-	for _, stale := range []string{
-		"Server-advertised shortcuts:",
-		"custom run|inspect",
-		"craken auth login --profile PROFILE",
-		"craken commands --profile PROFILE --format text",
-		"craken auth login --as-agent --workspace WORKSPACE_ID --agent-name",
-		"workspace list|get|create|delete",
-		"workspace|channel|dm|file|folder|wiki|agent|dream",
+	// The compact view defers the full reference: no section bodies, per-command
+	// descriptions/examples, local-flag block, or route dump leak into it.
+	for _, deferred := range []string{
+		"Getting started:",
+		"Run a custom product command discovered from the server.",
+		"Use the local device login command to store a bearer profile.",
+		"Local client commands:",
+		"Run the server-provided command",
+		"e.g. craken custom run --name demo",
+		"custom.operation\tPOST\t/api/custom",
+		"Server operations:",
+		"craken do OPERATION_ID",
 	} {
-		if strings.Contains(help, stale) {
-			t.Fatalf("expected help not to hard-code operation list %q, got:\n%s", stale, help)
+		if strings.Contains(help, deferred) {
+			t.Fatalf("expected compact help to defer %q to --verbose, got:\n%s", deferred, help)
 		}
 	}
 }
@@ -218,14 +218,180 @@ func TestHelpResourceRendersCatalogHelp(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// The compact default shows the title and summary but defers the help sections
+	// to the verbose reference.
+	var compact bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"help", "--base-url", server.URL}, strings.NewReader(""), &compact, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Catalog Help", "Server-owned overview."} {
+		if !strings.Contains(compact.String(), expected) {
+			t.Fatalf("expected compact help to contain %q, got:\n%s", expected, compact.String())
+		}
+	}
+	if strings.Contains(compact.String(), "Read this first.") {
+		t.Fatalf("expected compact help to defer section bodies to --verbose, got:\n%s", compact.String())
+	}
+
+	// --verbose renders the full server help, including section items.
+	var verbose bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"help", "--verbose", "--base-url", server.URL}, strings.NewReader(""), &verbose, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Catalog Help", "Server-owned overview.", "First step", "Read this first."} {
+		if !strings.Contains(verbose.String(), expected) {
+			t.Fatalf("expected verbose help to contain %q, got:\n%s", expected, verbose.String())
+		}
+	}
+}
+
+// statefulCatalogHandler serves a catalog carrying the server-owned auth and
+// nextSteps guidance the compact and JSON help views render.
+func statefulCatalogHandler(t *testing.T) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"auth": map[string]any{
+				"status":   "agent",
+				"identity": map[string]any{"email": "owner@example.com"},
+				"agent":    map[string]any{"agentId": "agent_1", "clientKind": "codex", "workspaceId": "ws_x"},
+			},
+			"nextSteps": []map[string]any{
+				{
+					"title":       "Subscribe to the workspace",
+					"command":     "craken workspace subs --workspace ws_x --pretty",
+					"description": "Stream realtime events for synchronous collaboration.",
+				},
+				{
+					"title":       "Wait for the next message",
+					"command":     "craken channel wait --workspace ws_x --channel CHANNEL --after MESSAGE_ID --timeout-ms 60000",
+					"description": "Bounded long-poll for an asynchronous agent loop.",
+				},
+			},
+			"commands": []map[string]any{{
+				"command":     "craken channel send --workspace WORKSPACE --channel CHANNEL MESSAGE",
+				"description": "Send a channel message.",
+				"group":       "Channel",
+				"id":          "channel.send",
+			}},
+			"help":          map[string]any{"title": "Craken", "summary": "Collaborate with people and agents."},
+			"routes":        []map[string]any{},
+			"schemaVersion": 1,
+		})
+	}
+}
+
+func TestHelpCompactRendersAuthStatusAndNextSteps(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(statefulCatalogHandler(t))
+	defer server.Close()
+
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), "dev", []string{"help", "--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), "dev", []string{"--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	help := stdout.String()
-	for _, expected := range []string{"Catalog Help", "Server-owned overview.", "First step", "Read this first."} {
+	for _, expected := range []string{
+		"Acting as a delegated agent in workspace ws_x (owner owner@example.com).",
+		"Next steps:",
+		"1. craken workspace subs --workspace ws_x --pretty",
+		"Stream realtime events for synchronous collaboration.",
+		"2. craken channel wait --workspace ws_x --channel CHANNEL --after MESSAGE_ID --timeout-ms 60000",
+		"Server commands:",
+		"Channel: send",
+	} {
 		if !strings.Contains(help, expected) {
-			t.Fatalf("expected help to contain %q, got:\n%s", expected, help)
+			t.Fatalf("expected compact help to contain %q, got:\n%s", expected, help)
+		}
+	}
+}
+
+func TestHelpFormatJSONEmitsGuidance(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(statefulCatalogHandler(t))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"help", "--format", "json", "--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Auth struct {
+			Status string `json:"status"`
+			Agent  struct {
+				WorkspaceID string `json:"workspaceId"`
+			} `json:"agent"`
+		} `json:"auth"`
+		NextSteps []struct {
+			Command string `json:"command"`
+		} `json:"nextSteps"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("expected JSON guidance, got error %v and output:\n%s", err, stdout.String())
+	}
+	if out.Auth.Status != "agent" || out.Auth.Agent.WorkspaceID != "ws_x" {
+		t.Fatalf("expected agent auth in JSON, got %+v", out.Auth)
+	}
+	if len(out.NextSteps) == 0 || out.NextSteps[0].Command != "craken workspace subs --workspace ws_x --pretty" {
+		t.Fatalf("expected nextSteps in JSON, got %+v", out.NextSteps)
+	}
+	if out.Summary == "" {
+		t.Fatalf("expected summary in JSON, got:\n%s", stdout.String())
+	}
+}
+
+func TestHelpVerboseRendersFullReference(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CRAKEN_CONFIG_DIR", configDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/client" {
+			t.Fatalf("unexpected help path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"commands": []map[string]any{{
+				"command":     "craken custom run --name NAME",
+				"description": "Run the server-provided command",
+				"examples":    []string{"craken custom run --name demo"},
+				"group":       "Custom",
+				"id":          "custom.run",
+				"operationId": "custom.operation",
+			}},
+			"help": map[string]any{"title": "Craken", "summary": "Overview."},
+			"routes": []map[string]any{{
+				"auth":        "required",
+				"description": "Run a custom operation",
+				"id":          "custom.operation",
+				"method":      "POST",
+				"path":        "/api/custom",
+				"requestBody": "json",
+			}},
+			"schemaVersion": 1,
+		})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), "dev", []string{"help", "--verbose", "--base-url", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	help := stdout.String()
+	for _, expected := range []string{
+		"Local client commands:",
+		"craken auth login",
+		"Server commands:",
+		"Run the server-provided command",
+		"e.g. craken custom run --name demo",
+		"Server operations:",
+		"custom.operation\tPOST\t/api/custom\tRun a custom operation",
+	} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("expected verbose help to contain %q, got:\n%s", expected, help)
 		}
 	}
 }

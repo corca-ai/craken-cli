@@ -33,13 +33,45 @@ type route struct {
 }
 
 type clientCatalog struct {
-	BuildID       string           `json:"buildId"`
-	Commands      []cliCommand     `json:"commands,omitempty"`
-	Examples      []commandExample `json:"examples,omitempty"`
-	Help          *catalogHelp     `json:"help,omitempty"`
-	Routes        []route          `json:"routes"`
-	SchemaVersion int              `json:"schemaVersion"`
-	Shortcuts     []shortcut       `json:"shortcuts,omitempty"`
+	Auth          *catalogAuth      `json:"auth,omitempty"`
+	BuildID       string            `json:"buildId"`
+	Commands      []cliCommand      `json:"commands,omitempty"`
+	Examples      []commandExample  `json:"examples,omitempty"`
+	Help          *catalogHelp      `json:"help,omitempty"`
+	NextSteps     []catalogNextStep `json:"nextSteps,omitempty"`
+	Routes        []route           `json:"routes"`
+	SchemaVersion int               `json:"schemaVersion"`
+	Shortcuts     []shortcut        `json:"shortcuts,omitempty"`
+}
+
+// catalogAuth is the server's authoritative view of who the selected bearer acts
+// as. The CLI renders it as a status line and exposes it in `help --format json`
+// so an agent can branch on state without decoding the token itself.
+type catalogAuth struct {
+	Agent    *catalogAuthAgent `json:"agent,omitempty"`
+	Identity *catalogIdentity  `json:"identity,omitempty"`
+	Status   string            `json:"status"`
+}
+
+type catalogIdentity struct {
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+}
+
+type catalogAuthAgent struct {
+	AgentID     string   `json:"agentId"`
+	ClientKind  string   `json:"clientKind,omitempty"`
+	Scopes      []string `json:"scopes,omitempty"`
+	WorkspaceID string   `json:"workspaceId"`
+}
+
+// catalogNextStep is one server-recommended action for the current auth state.
+// command is a ready-to-run invocation (the server substitutes a known workspace
+// id for delegated agents) so the CLI and agents can run it verbatim.
+type catalogNextStep struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	Title       string `json:"title"`
 }
 
 type catalogHelp struct {
@@ -342,6 +374,11 @@ func catalogFromValue(value any) (clientCatalog, error) {
 	for _, shortcut := range catalog.Shortcuts {
 		if trim(shortcut.Resource) == "" || len(shortcut.Actions) == 0 || trim(shortcut.Description) == "" {
 			return clientCatalog{}, fmt.Errorf("invalid shortcut in client command catalog")
+		}
+	}
+	for _, step := range catalog.NextSteps {
+		if trim(step.Command) == "" {
+			return clientCatalog{}, fmt.Errorf("invalid next step in client command catalog")
 		}
 	}
 	if catalog.Help != nil {

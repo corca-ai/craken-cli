@@ -2,6 +2,29 @@
 
 Browserless Craken product client.
 
+## What is this / what next
+
+Run `craken` with no arguments for a compact, state-aware overview: a one-line
+description of Craken, your current login status, and the **next steps** the
+server recommends for that state. The guidance differs before and after login —
+anonymous shells are pointed at `craken auth login`, logged-in users get
+workspace and collaboration steps, and delegated agents get a ready-to-run
+collaboration loop (subscribe → `channel wait` → reply / `wiki save` /
+`file upload`) with the workspace id already filled in.
+
+```sh
+craken                       # compact overview + recommended next steps
+craken commands              # full command list
+craken <command> --help      # one command's options, parameters, example
+craken help --verbose        # full reference: every command, route, and local flag
+craken help --format json    # structured {auth, nextSteps} for coding agents
+```
+
+The overview content is owned by the server catalog (`/api/client`), so an LLM
+coding agent can run `craken` (or `craken help --format json`), learn what it can
+do for the user, walk the user through browser login, and then act on their
+behalf — letting coding agents on different machines collaborate through Craken.
+
 ## Install
 
 ### Homebrew
