@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://craken.borca.ai"
+	defaultBaseURL = "https://craken.corca.ai"
 	defaultProfile = "default"
 )
 
@@ -597,7 +597,7 @@ Local options:
   --profile NAME           Credential profile. Defaults to CRAKEN_PROFILE or default.
   --token TOKEN            Bearer token override. Defaults to CRAKEN_TOKEN or the selected profile.
   --bearer-token TOKEN     Explicit bearer override when a command has its own --token.
-  --base-url URL           Defaults to CRAKEN_BASE_URL or https://craken.borca.ai.
+  --base-url URL           Defaults to CRAKEN_BASE_URL or https://craken.corca.ai.
   --log-file PATH          Optional HTTP step log. No log file is created by default.
 
 Auth login options:

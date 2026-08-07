@@ -8,7 +8,7 @@ Read these first:
 
 Current architecture:
 
-- `craken` is a Go CLI for Craken at `https://craken.borca.ai`.
+- `craken` is a Go CLI for Craken at `https://craken.corca.ai`.
 - It stores named bearer profiles in `${CRAKEN_CONFIG_DIR:-~/.config/craken}/config.json`, matching the legacy Node CLI profile format.
 - Browser login uses the `/api/client/device-authorizations` and `/api/client/device-token` device-code flow, then product commands call the same HTTP and WebSocket APIs used by the browser.
 - Agent login uses the `/api/client/agent-device-authorizations` and `/api/client/agent-device-token` variant when `auth login --as-agent` is passed. It stores an ordinary bearer token plus optional profile metadata for the external agent identity. The profile is only stamped `kind: "agent"` when the minted token actually decodes to a `delegatedAgent` claim, so a user-scoped token is never silently mislabeled as the agent. `craken auth whoami` reports the effective identity and delegated-agent scopes.
