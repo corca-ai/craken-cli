@@ -401,16 +401,9 @@ func printResponseExample(stdout io.Writer, value any) error {
 // grouped command summary, and pointers to the fuller views. The server owns all
 // the state-specific content (auth/nextSteps/help); the CLI only lays it out.
 func printCatalogHelp(stdout io.Writer, catalog clientCatalog) error {
-	title := "Craken"
 	summary := ""
 	if catalog.Help != nil {
-		if trim(catalog.Help.Title) != "" {
-			title = catalog.Help.Title
-		}
 		summary = catalog.Help.Summary
-	}
-	if _, err := fmt.Fprintf(stdout, "%s\n", title); err != nil {
-		return err
 	}
 	if trim(summary) != "" {
 		if _, err := fmt.Fprintf(stdout, "%s\n", summary); err != nil {
@@ -444,7 +437,7 @@ More:
   craken commands            List every command available to this profile.
   craken <command> --help    Show one command's options and parameters.
   craken help --verbose      Full reference: every command, route, and local flag.
-  craken help --format json  Structured guidance (auth, nextSteps) for coding agents.
+  craken help --format json  Structured guidance (auth, nextSteps) for AI agents.
 `)
 	return err
 }
@@ -536,7 +529,7 @@ func groupedCommandSummaries(commands []cliCommand) []string {
 	return lines
 }
 
-// printCatalogHelpJSON emits the state-aware guidance as JSON for coding agents:
+// printCatalogHelpJSON emits the state-aware guidance as JSON for AI agents:
 // the identity (auth) and the recommended next steps, plus the one-line summary.
 func printCatalogHelpJSON(stdout io.Writer, catalog clientCatalog, connection map[string]any) error {
 	out := map[string]any{"nextSteps": nextStepsForJSON(catalog), "connection": connection}
