@@ -114,10 +114,15 @@ func localCommandHelpOptions(command cliCommand) []string {
 	if command.Execution.Transport == commandTransportWebSocket {
 		options = append(
 			options,
-			"--limit N                 Stop after receiving N WebSocket messages.",
-			"--timeout-ms MS          Stop when no WebSocket message arrives before the timeout.",
+			"--limit N                 Stop after N frames (raw) or emitted records (--messages).",
+			"--timeout-ms MS          Transport idle window; any received frame resets it.",
 			"--pretty                 Pretty-print JSON WebSocket messages.",
+			"--fields LIST            Project dotted JSON fields (on records in message mode).",
+			"--format raw|ndjson      Raw frames or one JSON value per line; raw allows --pretty.",
 		)
+		if command.Execution.WebSocket.Stream != nil {
+			options = append(options, "--messages               Emit catalog-defined message records as NDJSON.", "--wait-timeout-ms MS      Relevant-message wait; unrelated frames do not reset it.")
+		}
 	}
 	return options
 }

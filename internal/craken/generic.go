@@ -188,6 +188,7 @@ type commandMultipartPlan struct {
 
 type commandWebSocketPlan struct {
 	Protocols []commandWebSocketProtocol `json:"protocols,omitempty"`
+	Stream    *commandStreamPlan         `json:"stream,omitempty"`
 }
 
 type commandWebSocketProtocol struct {
