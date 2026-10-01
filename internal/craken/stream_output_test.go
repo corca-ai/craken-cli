@@ -91,13 +91,13 @@ func TestMessageWaitDoesNotResetOnUnrelatedFrames(t *testing.T) {
 	if _, err = output.emitFrame(&bytes.Buffer{}, []byte(`{"entries":[],"scanned":12}`)); err != nil {
 		t.Fatal(err)
 	}
-	if output.waitUntil != original {
+	if !output.waitUntil.Equal(original) {
 		t.Fatal("unrelated frame reset message wait")
 	}
 	if _, err = output.emitFrame(&bytes.Buffer{}, []byte(`{"entry":{"cursor":13,"message":{"id":"m"}}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if output.waitUntil == original {
+	if output.waitUntil.Equal(original) {
 		t.Fatal("matching record did not reset message wait")
 	}
 }
