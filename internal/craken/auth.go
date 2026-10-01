@@ -70,10 +70,7 @@ func whoami(ctx context.Context, cmd command, stdout io.Writer) error {
 	prof := cfg.Profiles[name]
 	token := selectedBearerToken(cmd, prof)
 
-	out := map[string]any{"profile": name}
-	if prof.BaseURL != "" {
-		out["baseUrl"] = prof.BaseURL
-	}
+	out := map[string]any{"profile": name, "baseUrl": selectedBaseURL(cmd, prof)}
 	if prof.Kind != "" {
 		out["profileKind"] = prof.Kind
 	}
@@ -225,16 +222,8 @@ func login(ctx context.Context, cmd command, stdout io.Writer, stderr io.Writer)
 	if err := guardCredentialOverwrite(cmd, name, prof); err != nil {
 		return err
 	}
-	baseURL := cmd.string("base-url", "")
-	if baseURL == "" {
-		baseURL = prof.BaseURL
-	}
-	if baseURL == "" {
-		baseURL = getenvTrim("CRAKEN_BASE_URL")
-	}
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
+	baseURL := selectedBaseURL(cmd, prof)
+
 	timeoutMS, err := numberOption(cmd, "timeout-ms", 300000)
 	if err != nil {
 		return err

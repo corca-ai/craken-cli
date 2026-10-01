@@ -20,6 +20,8 @@ craken help --verbose        # full reference: every command, route, and local f
 craken help --format json    # structured {auth, nextSteps} for coding agents
 ```
 
+Local bootstrap help, including `auth login --help`, works without a network connection. Resource help such as `workspace --help` lists the server-published commands for that resource even before login. If catalog discovery fails, help explicitly labels its minimal local fallback and makes no claim about current authentication or permissions. `auth whoami` and JSON help include the effective profile/server; JSON fallback identifies `source: "local-fallback"` and omits unconfirmed `auth`.
+
 The overview content is owned by the server catalog (`/api/client`), so an LLM
 coding agent can run `craken` (or `craken help --format json`), learn what it can
 do for the user, walk the user through browser login, and then act on their

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 const (
@@ -41,7 +42,7 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 		return err
 	}
 	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
-		return runHelp(ctx, cmd, logger, stdout)
+		return runHelp(ctx, cmd, logger, stdout, stderr)
 	}
 
 	if cmd.Resource == "auth" {
@@ -158,26 +159,47 @@ func (cmd command) withPositionals(positionals []string) command {
 	return cmd
 }
 
-func runHelp(ctx context.Context, cmd command, logger *logger, stdout io.Writer) error {
-	client, err := newCatalogClient(cmd, logger)
-	if err != nil {
+func runHelp(ctx context.Context, cmd command, logger *logger, stdout, stderr io.Writer) error {
+	if help := localHelpText(cmd); help != "" {
+		_, err := fmt.Fprint(stdout, help)
 		return err
 	}
-	value, err := client.json(ctx, "/api/client")
+	client, err := newCatalogClient(cmd, logger)
 	if err != nil {
-		return err
+		return printHelpFallback(stdout, stderr, cmd, client, err)
+	}
+	helpContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	value, err := client.json(helpContext, "/api/client")
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return printHelpFallback(stdout, stderr, cmd, client, err)
 	}
 	catalog, err := catalogFromValue(value)
 	if err != nil {
-		return err
+		return printHelpFallback(stdout, stderr, cmd, client, err)
+	}
+	if shown, err := printResourceHelp(stdout, cmd, catalog); shown || err != nil {
+		if err != nil {
+			return err
+		}
+		return printHelpConnection(stdout, cmd, client, catalog.Auth)
 	}
 	if command, route := focusedHelpTarget(cmd, catalog); command != nil || route != nil {
+		if err := printHelpConnection(stdout, cmd, client, catalog.Auth); err != nil {
+			return err
+		}
 		return printFocusedCommandHelp(stdout, cmd, command, route)
 	}
 	// The default overview stays compact and state-aware; the full reference and
 	// the machine-readable guidance are opt-in so neither buries the other.
 	if cmd.string("format", "") == "json" || boolOption(cmd, "json") {
-		return printCatalogHelpJSON(stdout, catalog)
+		return printCatalogHelpJSON(stdout, catalog, map[string]any{"profile": profileName(cmd), "baseUrl": client.baseURL})
+	}
+	if err := printHelpConnection(stdout, cmd, client, nil); err != nil {
+		return err
 	}
 	if boolOption(cmd, "verbose") || boolOption(cmd, "all") {
 		return printVerboseCatalogHelp(stdout, catalog)
@@ -516,8 +538,8 @@ func groupedCommandSummaries(commands []cliCommand) []string {
 
 // printCatalogHelpJSON emits the state-aware guidance as JSON for coding agents:
 // the identity (auth) and the recommended next steps, plus the one-line summary.
-func printCatalogHelpJSON(stdout io.Writer, catalog clientCatalog) error {
-	out := map[string]any{"nextSteps": nextStepsForJSON(catalog)}
+func printCatalogHelpJSON(stdout io.Writer, catalog clientCatalog, connection map[string]any) error {
+	out := map[string]any{"nextSteps": nextStepsForJSON(catalog), "connection": connection}
 	if catalog.Auth != nil {
 		out["auth"] = catalog.Auth
 	}

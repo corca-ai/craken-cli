@@ -40,16 +40,8 @@ func newClientWithAuthRequirement(cmd command, log *logger, requireToken bool) (
 		return nil, err
 	}
 	prof := cfg.Profiles[profileName(cmd)]
-	baseURL := cmd.string("base-url", "")
-	if baseURL == "" {
-		baseURL = prof.BaseURL
-	}
-	if baseURL == "" {
-		baseURL = os.Getenv("CRAKEN_BASE_URL")
-	}
-	if trim(baseURL) == "" {
-		baseURL = defaultBaseURL
-	}
+	baseURL := selectedBaseURL(cmd, prof)
+
 	token := selectedBearerToken(cmd, prof)
 	if requireToken && trim(token) == "" {
 		return nil, fmt.Errorf("bearer token is required. Run auth import-token, set CRAKEN_TOKEN, or pass --token/--bearer-token")
