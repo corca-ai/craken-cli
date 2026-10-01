@@ -26,11 +26,22 @@ func runCatalogWebSocketCommand(
 	consumed map[string]bool,
 	stdout io.Writer,
 ) error {
+	output, err := newStreamOutput(cmd, plan.WebSocket.Stream)
+	if err != nil {
+		return err
+	}
 	query, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed, nil)
 	if err != nil {
 		return err
 	}
-	if plan.QueryParams != nil {
+	if output.messages {
+		for name, value := range output.plan.MessageQuery {
+			if _, ok := query[name]; !ok {
+				query[name] = value
+			}
+		}
+	}
+	if len(query) > 0 {
 		path = appendQuery(path, query)
 	}
 	endpoint, err := client.resolve(path)
@@ -42,10 +53,6 @@ func runCatalogWebSocketCommand(
 		endpoint.Scheme = "wss"
 	case "http":
 		endpoint.Scheme = "ws"
-	}
-	limit, err := numberOption(cmd, "limit", 0)
-	if err != nil {
-		return err
 	}
 	timeoutMS, err := numberOption(cmd, "timeout-ms", 0)
 	if err != nil {
@@ -62,7 +69,13 @@ func runCatalogWebSocketCommand(
 		return fmt.Errorf("websocket subscription failed for %s: %w", endpoint.String(), err)
 	}
 	defer func() { _ = connection.Close() }()
-	return streamWebSocketMessages(connection, cmd, limit, timeoutMS, stdout)
+	stop := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stop()
+	err = readStream(connection, output, timeoutMS, stdout)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 // wsConn is the minimal websocket connection surface used by the read loop. It
@@ -74,17 +87,35 @@ type wsConn interface {
 }
 
 func streamWebSocketMessages(conn wsConn, cmd command, limit int, timeoutMS int, stdout io.Writer) error {
+	output, err := newStreamOutput(cmd, nil)
+	if err != nil {
+		return err
+	}
+	output.limit = limit
+	return readStream(conn, output, timeoutMS, stdout)
+}
+
+func readStream(conn wsConn, output *streamOutput, timeoutMS int, stdout io.Writer) error {
+	if output.wait > 0 && output.waitUntil.IsZero() {
+		output.waitUntil = time.Now().Add(output.wait)
+	}
 	armDeadline := func() {
+		var deadline time.Time
 		if timeoutMS > 0 {
-			_ = conn.SetReadDeadline(time.Now().Add(time.Duration(timeoutMS) * time.Millisecond))
+			deadline = time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+		}
+		if output.wait > 0 && (deadline.IsZero() || output.waitUntil.Before(deadline)) {
+			deadline = output.waitUntil
+		}
+		if !deadline.IsZero() {
+			_ = conn.SetReadDeadline(deadline)
 		}
 	}
 	armDeadline()
-	seen := 0
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if timeoutMS > 0 && strings.Contains(strings.ToLower(err.Error()), "timeout") {
+			if (timeoutMS > 0 || output.wait > 0) && strings.Contains(strings.ToLower(err.Error()), "timeout") {
 				return nil
 			}
 			// Both a normal (1000) and an orderly server-initiated Going Away
@@ -94,11 +125,11 @@ func streamWebSocketMessages(conn wsConn, cmd command, limit int, timeoutMS int,
 			}
 			return err
 		}
-		if err := printWebSocketMessage(stdout, message, cmd); err != nil {
+		done, err := output.emitFrame(stdout, message)
+		if err != nil {
 			return err
 		}
-		seen++
-		if limit > 0 && seen >= limit {
+		if done {
 			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "limit"), time.Now().Add(time.Second))
 			return nil
 		}
@@ -142,7 +173,8 @@ func catalogWebSocketProtocols(
 }
 
 func printWebSocketMessage(stdout io.Writer, message []byte, cmd command) error {
-	if !boolOption(cmd, "pretty") {
+	fields := cmd.string("fields", "")
+	if !boolOption(cmd, "pretty") && fields == "" && cmd.string("format", "") != "ndjson" {
 		_, err := fmt.Fprintln(stdout, string(message))
 		return err
 	}
@@ -150,5 +182,15 @@ func printWebSocketMessage(stdout io.Writer, message []byte, cmd command) error 
 	if err := json.Unmarshal(message, &parsed); err != nil {
 		return err
 	}
-	return printJSON(stdout, parsed)
+	if fields != "" {
+		var err error
+		parsed, err = projectFields(parsed, fields)
+		if err != nil {
+			return err
+		}
+	}
+	if boolOption(cmd, "pretty") {
+		return printJSON(stdout, parsed)
+	}
+	return json.NewEncoder(stdout).Encode(parsed)
 }

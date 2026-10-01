@@ -102,3 +102,7 @@ EOF
 ```
 
 Dedicated message and wiki-history commands accept `--compact` for tab-separated summaries. They also accept `--fields LIST`, where `LIST` is a comma-separated set of dotted JSON paths such as `messages.id,messages.sender.name,messages.body`.
+
+Realtime streams support `--fields` on raw JSON envelopes. On a server advertising message stream metadata, `workspace subs --messages --sender-kind user` emits one NDJSON record per message without profile pictures. Records include conversation, stable event/message ids, activity sequence, sender identity, timestamp, and body; real multiline bodies remain JSON-escaped in one line. `--fields messageId,sender.id,body` projects the message record. `--format raw --pretty` retains full events.
+
+`--limit` counts frames in raw mode and emitted records in message mode. `--timeout-ms` stops after transport inactivity; `--wait-timeout-ms` stops after no matching message, even if unrelated frames continue. Timeout is normal completion. `--compact` and message mode with `--pretty` are rejected explicitly. Server-advertised `--event-types`, `--conversation-kind`, `--channel`, `--channels`, `--sender-kind`, `--mentions-me`, and `--include-dm` perform selection on authorized events.
