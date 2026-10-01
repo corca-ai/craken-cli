@@ -529,7 +529,7 @@ func groupedCommandSummaries(commands []cliCommand) []string {
 	return lines
 }
 
-// printCatalogHelpJSON emits the state-aware guidance as JSON for coding agents:
+// printCatalogHelpJSON emits the state-aware guidance as JSON for AI agents:
 // the identity (auth) and the recommended next steps, plus the one-line summary.
 func printCatalogHelpJSON(stdout io.Writer, catalog clientCatalog, connection map[string]any) error {
 	out := map[string]any{"nextSteps": nextStepsForJSON(catalog), "connection": connection}
