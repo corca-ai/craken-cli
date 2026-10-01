@@ -106,3 +106,19 @@ Dedicated message and wiki-history commands accept `--compact` for tab-separated
 Realtime streams support `--fields` on raw JSON envelopes. On a server advertising message stream metadata, `workspace subs --messages --sender-kind user` emits one NDJSON record per message without profile pictures. Records include conversation, stable event/message ids, activity sequence, sender identity, timestamp, and body; real multiline bodies remain JSON-escaped in one line. `--fields messageId,sender.id,body` projects the message record. `--format raw --pretty` retains full events.
 
 `--limit` counts frames in raw mode and emitted records in message mode. `--timeout-ms` stops after transport inactivity; `--wait-timeout-ms` stops after no matching message, even if unrelated frames continue. Timeout is normal completion. `--compact` and message mode with `--pretty` are rejected explicitly. Server-advertised `--event-types`, `--conversation-kind`, `--channel`, `--channels`, `--sender-kind`, `--mentions-me`, and `--include-dm` perform selection on authorized events.
+
+With the current server catalog, `workspace listen` defaults to new human messages in channels, scoped local resume, and reconnect. For one instruction across a selected channel and this identity's DMs:
+
+```sh
+craken --profile my-agent workspace listen --workspace W --channel general --mentions-me --include-dm --once --wait-timeout-ms 60000
+```
+
+Without `--mentions-me`, all selected human messages are included. Mention selection uses server-owned participant aliases; agents match their own name, and included DMs need no mention. `--sender-kind agent|system` overrides the human default, and `--channels` accepts comma-separated channel ids. Raw `workspace subs`/`tail` defaults remain unchanged.
+
+On first start, the listener reads the server-advertised snapshot head and replays from there, including an empty workspace's cursor zero. Later starts load `${CRAKEN_CONFIG_DIR:-~/.config/craken}/streams/<scope-hash>.json`. Scope includes canonical server URL, profile, effective bearer identity, workspace/path, selection, output mode, and fields. Decodable token renewals retain identity; opaque credentials are isolated by token hash. Files are atomic replacements with mode 0600. Run one active consumer per scope. `--after N` overrides saved state; `--resume=false` disables disk persistence and starts from the current head on each run.
+
+Resume records successful stdout output and authorized scan checkpoints, including filtered rows. It does not acknowledge completed application work: a crash between output and saving can repeat records. Deduplicate `eventId`/`messageId`; this transport makes no exactly-once processing claim. The service can request replay continuation with close code 1013; reconnect continues from the last consumed activity sequence.
+
+`--reconnect=false` disables retries. Transient failures use a default budget of five consecutive retries (`--max-retries 0..100`), with exponential backoff from 250ms (`--retry-delay-ms 1..5000`), jitter, and a five-second cap. Successful scan/output progress resets the budget. Authentication/permission rejection, protocol/policy close, invalid data, failed stdout, and failed checkpoint writes stop immediately. Connection/retry/inactivity diagnostics go to stderr; stdout contains data only.
+
+Limits, `--once`, and normal inactivity exit 0; authentication failure or exhausted retries exit 1. SIGINT exits 130 and SIGTERM exits 143, canceling network reads and backoff promptly. No listener subprocesses are spawned.

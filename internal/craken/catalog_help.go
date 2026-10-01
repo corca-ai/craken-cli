@@ -121,7 +121,19 @@ func localCommandHelpOptions(command cliCommand) []string {
 			"--format raw|ndjson      Raw frames or one JSON value per line; raw allows --pretty.",
 		)
 		if command.Execution.WebSocket.Stream != nil {
-			options = append(options, "--messages               Emit catalog-defined message records as NDJSON.", "--wait-timeout-ms MS      Relevant-message wait; unrelated frames do not reset it.")
+			stream := command.Execution.WebSocket.Stream
+			options = append(options,
+				fmt.Sprintf("--messages               Emit message NDJSON (default %t); --format raw gets full events.", stream.DefaultMessages),
+				"--wait-timeout-ms MS      Relevant-message wait; unrelated frames do not reset it.",
+				"--once                   Emit one matching message and exit (message mode only).",
+				fmt.Sprintf("--resume[=false]         Persist scoped scan position (default %t); first start reads current head.", stream.DefaultResume),
+				fmt.Sprintf("--reconnect[=false]      Retry transient disconnects (default %t).", stream.DefaultReconnect),
+				"--max-retries N          Consecutive retry budget, 0..100 (default 5).",
+				"--retry-delay-ms MS      Initial backoff, 1..5000 (default 250); doubles with jitter, capped at 5s.",
+				"Resume advances after successful stdout output, not completed work; deduplicate stable event/message ids.",
+				"One active consumer per resume scope. Explicit --after overrides saved state; --resume=false disables persistence.",
+				"Exit: 0 for limit/once or inactivity, 1 for auth/failure/exhausted retries, 130 for SIGINT, 143 for SIGTERM.",
+			)
 		}
 	}
 	return options
