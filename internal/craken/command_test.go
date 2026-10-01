@@ -157,10 +157,9 @@ func TestHelpRendersServerCatalogWithOptionalBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := stdout.String()
-	// The default overview is compact: title, summary, the (fallback) next step,
+	// The default overview is compact: summary, the (fallback) next step,
 	// a grouped command summary, and pointers to the fuller views.
 	for _, expected := range []string{
-		"Example Product",
 		"Example Product publishes this overview from its API catalog.",
 		"Next steps:",
 		"craken auth login",
@@ -218,18 +217,18 @@ func TestHelpResourceRendersCatalogHelp(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// The compact default shows the title and summary but defers the help sections
+	// The compact default shows the summary and defers the title and help sections
 	// to the verbose reference.
 	var compact bytes.Buffer
 	if err := Run(context.Background(), "dev", []string{"help", "--base-url", server.URL}, strings.NewReader(""), &compact, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Catalog Help", "Server-owned overview."} {
+	for _, expected := range []string{"Server-owned overview."} {
 		if !strings.Contains(compact.String(), expected) {
 			t.Fatalf("expected compact help to contain %q, got:\n%s", expected, compact.String())
 		}
 	}
-	if strings.Contains(compact.String(), "Read this first.") {
+	if strings.Contains(compact.String(), "Read this first.") || strings.Contains(compact.String(), "Catalog Help") || strings.Contains(compact.String(), "Profile:") || strings.Contains(compact.String(), "Server:") {
 		t.Fatalf("expected compact help to defer section bodies to --verbose, got:\n%s", compact.String())
 	}
 
@@ -238,7 +237,7 @@ func TestHelpResourceRendersCatalogHelp(t *testing.T) {
 	if err := Run(context.Background(), "dev", []string{"help", "--verbose", "--base-url", server.URL}, strings.NewReader(""), &verbose, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Catalog Help", "Server-owned overview.", "First step", "Read this first."} {
+	for _, expected := range []string{"Profile: default", "Server: " + server.URL, "Catalog Help", "Server-owned overview.", "First step", "Read this first."} {
 		if !strings.Contains(verbose.String(), expected) {
 			t.Fatalf("expected verbose help to contain %q, got:\n%s", expected, verbose.String())
 		}

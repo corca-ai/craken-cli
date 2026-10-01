@@ -94,14 +94,16 @@ func printHelpFallback(stdout, stderr io.Writer, cmd command, client *client, ca
 }
 
 func printHelpConnection(stdout io.Writer, cmd command, client *client, auth *catalogAuth) error {
-	_, err := fmt.Fprintf(stdout, "Profile: %s\nServer: %s\n", profileName(cmd), client.baseURL)
-	if err != nil {
-		return err
+	if boolOption(cmd, "verbose") || boolOption(cmd, "all") {
+		if _, err := fmt.Fprintf(stdout, "Profile: %s\nServer: %s\n", profileName(cmd), client.baseURL); err != nil {
+			return err
+		}
 	}
 	if line := authStatusLine(auth); line != "" {
-		_, err = fmt.Fprintln(stdout, line)
+		_, err := fmt.Fprintln(stdout, line)
+		return err
 	}
-	return err
+	return nil
 }
 
 func printResourceHelp(stdout io.Writer, cmd command, catalog clientCatalog) (bool, error) {

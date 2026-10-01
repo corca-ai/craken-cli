@@ -122,3 +122,5 @@ Resume records successful stdout output and authorized scan checkpoints, includi
 `--reconnect=false` disables retries. Transient failures use a default budget of five consecutive retries (`--max-retries 0..100`), with exponential backoff from 250ms (`--retry-delay-ms 1..5000`), jitter, and a five-second cap. Successful scan/output progress resets the budget. Authentication/permission rejection, protocol/policy close, invalid data, failed stdout, and failed checkpoint writes stop immediately. Connection/retry/inactivity diagnostics go to stderr; stdout contains data only.
 
 Limits, `--once`, and normal inactivity exit 0; authentication failure or exhausted retries exit 1. SIGINT exits 130 and SIGTERM exits 143, canceling network reads and backoff promptly. No listener subprocesses are spawned.
+
+Running `craken` starts with a short product description and state-aware next steps. Profile/server details appear in `craken auth whoami`, `craken help --verbose`, or JSON guidance instead of ordinary text help.
