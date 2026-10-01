@@ -204,7 +204,8 @@ func focusedHelpTarget(cmd command, catalog clientCatalog) (*cliCommand, *route)
 	id := cmd.Resource + "." + cmd.Action
 	for i := range catalog.Commands {
 		if catalog.Commands[i].ID == id {
-			return &catalog.Commands[i], routeByID(catalog.Routes, catalog.Commands[i].OperationID)
+			plan := selectedExecution(catalog.Commands[i], cmd)
+			return &catalog.Commands[i], routeByID(catalog.Routes, plan.OperationID)
 		}
 	}
 	return nil, nil
@@ -237,8 +238,10 @@ func printFocusedCommandHelp(stdout io.Writer, cmd command, command *cliCommand,
 			}
 		}
 	}
-	if command != nil {
-		if options := localCommandHelpOptions(*command); len(options) > 0 {
+	if command != nil && cmd.Resource != "do" {
+		effective := *command
+		effective.Execution = selectedExecution(*command, cmd)
+		if options := localCommandHelpOptions(effective); len(options) > 0 {
 			if _, err := fmt.Fprint(stdout, "\nOptions:\n"); err != nil {
 				return err
 			}
@@ -247,6 +250,11 @@ func printFocusedCommandHelp(stdout io.Writer, cmd command, command *cliCommand,
 					return err
 				}
 			}
+		}
+	}
+	if command != nil && cmd.Resource != "do" {
+		if err := printCommandVariants(stdout, *command); err != nil {
+			return err
 		}
 	}
 	if route == nil {
@@ -281,6 +289,9 @@ func printFocusedCommandHelp(stdout io.Writer, cmd command, command *cliCommand,
 }
 
 func focusedHelpUsage(cmd command, command *cliCommand, route *route) string {
+	if cmd.Resource == "do" && route != nil {
+		return fmt.Sprintf("craken do %s [options]", route.ID)
+	}
 	if command != nil && command.Command != "" {
 		return command.Command
 	}
@@ -361,51 +372,6 @@ func printResponseExample(stdout io.Writer, value any) error {
 	text := strings.ReplaceAll(string(bytes), "\n", "\n  ")
 	_, err = fmt.Fprintf(stdout, "\nResponse example:\n  %s\n", text)
 	return err
-}
-
-func localCommandHelpOptions(command cliCommand) []string {
-	options := []string{}
-	options = append(options, bindingHelpOptions(command.Execution.QueryParams)...)
-	if command.Execution.Output != nil {
-		options = append(options, "--fields LIST             Print JSON projected to comma-separated dotted fields.")
-		if command.Execution.Output.Mode == commandOutputModeTable {
-			options = append(options, "--compact                 Print the catalog table columns as tab-separated text.")
-		}
-	}
-	if command.Execution.Poll != nil {
-		options = append(
-			options,
-			fmt.Sprintf("--%s N              Poll interval in seconds.", command.Execution.Poll.IntervalOption),
-			fmt.Sprintf("--%s N             Maximum poll attempts.", command.Execution.Poll.MaxPollsOption),
-		)
-	}
-	if command.Execution.Transport == commandTransportWebSocket {
-		options = append(
-			options,
-			"--limit N                 Stop after receiving N WebSocket messages.",
-			"--timeout-ms MS          Stop when no WebSocket message arrives before the timeout.",
-			"--pretty                 Pretty-print JSON WebSocket messages.",
-		)
-	}
-	return options
-}
-
-func bindingHelpOptions(bindings map[string]commandBinding) []string {
-	options := []string{}
-	for _, binding := range bindings {
-		if binding.Source != commandBindingSourceOption || binding.Option == "" {
-			continue
-		}
-		value := "VALUE"
-		if binding.Type == commandBindingValueTypeInteger {
-			value = "N"
-		}
-		if binding.Type == commandBindingValueTypeJSON {
-			value = "JSON"
-		}
-		options = append(options, fmt.Sprintf("--%s %s", binding.Option, value))
-	}
-	return options
 }
 
 // printCatalogHelp renders the default, compact, state-aware overview: what
