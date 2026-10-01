@@ -75,9 +75,10 @@ func bindingHelpOption(binding commandBinding) string {
 		}
 	case commandBindingSourceOption, "":
 		value := "VALUE"
-		if binding.Type == commandBindingValueTypeInteger {
+		switch binding.Type {
+		case commandBindingValueTypeInteger:
 			value = "N"
-		} else if binding.Type == commandBindingValueTypeJSON {
+		case commandBindingValueTypeJSON:
 			value = "JSON"
 		}
 		option += " " + value
