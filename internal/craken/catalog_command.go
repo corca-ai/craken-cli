@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout io.Writer, stdin io.Reader) error {
+func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout io.Writer, stdin io.Reader, stderr io.Writer) error {
 	catalogValue, err := client.json(ctx, "/api/client")
 	if err != nil {
 		return err
@@ -54,7 +54,7 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	case commandTransportMultipart:
 		return runCatalogMultipartCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportWebSocket:
-		return runCatalogWebSocketCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
+		return runCatalogWebSocketCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout, stderr)
 	default:
 		return fmt.Errorf("unsupported catalog command transport: %s", plan.Transport)
 	}

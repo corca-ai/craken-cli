@@ -77,7 +77,7 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 		}
 		return runRawHTTP(ctx, client, method, first(cmd.Positionals, cmd.string("path", "")), cmd.withPositionals(rest(cmd.Positionals)), stdout, stdin)
 	default:
-		return runCatalogCommand(ctx, client, cmd, stdout, stdin)
+		return runCatalogCommand(ctx, client, cmd, stdout, stdin, stderr)
 	}
 }
 

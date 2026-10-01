@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,6 +24,7 @@ func runCatalogWebSocketCommand(
 	resolved map[string]string,
 	consumed map[string]bool,
 	stdout io.Writer,
+	stderr io.Writer,
 ) error {
 	output, err := newStreamOutput(cmd, plan.WebSocket.Stream)
 	if err != nil {
@@ -40,6 +40,10 @@ func runCatalogWebSocketCommand(
 				query[name] = value
 			}
 		}
+	}
+	reconnect, err := prepareStreamResume(ctx, client, routes, plan, cmd, path, query, resolved, output)
+	if err != nil {
+		return err
 	}
 	if len(query) > 0 {
 		path = appendQuery(path, query)
@@ -64,18 +68,7 @@ func runCatalogWebSocketCommand(
 	}
 	dialer := *websocketDialer
 	dialer.Subprotocols = protocols
-	connection, _, err := dialer.DialContext(ctx, endpoint.String(), http.Header{})
-	if err != nil {
-		return fmt.Errorf("websocket subscription failed for %s: %w", endpoint.String(), err)
-	}
-	defer func() { _ = connection.Close() }()
-	stop := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	defer stop()
-	err = readStream(connection, output, timeoutMS, stdout)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return err
+	return runStreamConnections(ctx, endpoint, &dialer, output, timeoutMS, reconnect, cmd, stdout, stderr)
 }
 
 // wsConn is the minimal websocket connection surface used by the read loop. It
@@ -92,7 +85,11 @@ func streamWebSocketMessages(conn wsConn, cmd command, limit int, timeoutMS int,
 		return err
 	}
 	output.limit = limit
-	return readStream(conn, output, timeoutMS, stdout)
+	err = readStream(conn, output, timeoutMS, stdout)
+	if errors.Is(err, errStreamComplete) || errors.Is(err, errStreamInactive) || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return nil
+	}
+	return err
 }
 
 func readStream(conn wsConn, output *streamOutput, timeoutMS int, stdout io.Writer) error {
@@ -115,23 +112,18 @@ func readStream(conn wsConn, output *streamOutput, timeoutMS int, stdout io.Writ
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if (timeoutMS > 0 || output.wait > 0) && strings.Contains(strings.ToLower(err.Error()), "timeout") {
-				return nil
-			}
-			// Both a normal (1000) and an orderly server-initiated Going Away
-			// (1001) close terminate the subscription cleanly.
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil
+			if (timeoutMS > 0 || output.wait > 0) && streamTimedOut(err) {
+				return errStreamInactive
 			}
 			return err
 		}
 		done, err := output.emitFrame(stdout, message)
 		if err != nil {
-			return err
+			return &streamDataError{err: err}
 		}
 		if done {
 			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "limit"), time.Now().Add(time.Second))
-			return nil
+			return errStreamComplete
 		}
 		// Re-arm the idle timeout after each received message so --timeout-ms is a
 		// per-message idle window rather than a fixed total deadline from connect.
