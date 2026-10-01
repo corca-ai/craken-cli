@@ -93,7 +93,7 @@ func writeStreamCheckpoint(path, scope string, cursor int64) error {
 		return err
 	}
 	temp := file.Name()
-	defer os.Remove(temp)
+	defer func() { _ = os.Remove(temp) }()
 	if _, err = file.Write(append(raw, '\n')); err == nil {
 		err = file.Sync()
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,7 +39,7 @@ func TestStreamRecoversGapAndResumesAfterRestart(t *testing.T) {
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		switch index {
 		case 1:
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"entry":{"cursor":6,"message":{"id":"m6","text":"before reset"}}}`))
@@ -88,7 +89,7 @@ func TestStreamCancellationInterruptsBlockedRead(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		close(ready)
 		_, _, _ = conn.ReadMessage()
 	}))
@@ -103,7 +104,7 @@ func TestStreamCancellationInterruptsBlockedRead(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("got %v", err)
 		}
 	case <-time.After(time.Second):
@@ -153,7 +154,7 @@ func TestStreamCancellationInterruptsBackoff(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("got %v", err)
 		}
 	case <-time.After(time.Second):
@@ -168,7 +169,7 @@ func TestStreamMessageWaitIgnoresContinuousOtherFrames(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for index := 0; index < 40; index++ {
 			if err = conn.WriteMessage(websocket.TextMessage, []byte(`{"entries":[],"scanned":1}`)); err != nil {
 				return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -85,7 +86,7 @@ func streamWebSocketMessages(conn wsConn, cmd command, limit int, timeoutMS int,
 	}
 	output.limit = limit
 	err = readStream(conn, output, timeoutMS, stdout)
-	if err == errStreamComplete || err == errStreamInactive || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+	if errors.Is(err, errStreamComplete) || errors.Is(err, errStreamInactive) || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return nil
 	}
 	return err

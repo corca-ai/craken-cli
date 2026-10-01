@@ -103,7 +103,7 @@ func dialAndReadStream(ctx context.Context, endpoint *url.URL, dialer *websocket
 	}
 	connection, response, err := dialer.DialContext(dialContext, endpoint.String(), http.Header{})
 	if response != nil && response.Body != nil {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 	}
 	if err != nil {
 		if response != nil {
@@ -111,7 +111,7 @@ func dialAndReadStream(ctx context.Context, endpoint *url.URL, dialer *websocket
 		}
 		return response, err
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stop()
 	return response, readStream(connection, output, idleMS, stdout)

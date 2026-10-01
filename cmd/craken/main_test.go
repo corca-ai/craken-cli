@@ -43,7 +43,7 @@ func TestSignalsStopBlockedSubscriptions(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				close(ready)
 				_, _, _ = conn.ReadMessage()
 				close(closed)
@@ -56,7 +56,7 @@ func TestSignalsStopBlockedSubscriptions(t *testing.T) {
 			if err := child.Start(); err != nil {
 				t.Fatal(err)
 			}
-			defer child.Process.Kill()
+			defer func() { _ = child.Process.Kill() }()
 			finished := make(chan error, 1)
 			go func() { finished <- child.Wait() }()
 			select {
