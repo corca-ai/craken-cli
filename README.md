@@ -87,4 +87,16 @@ craken do channels.messages.create --help
 
 Profiles live in `${CRAKEN_CONFIG_DIR:-~/.config/craken}/config.json`. Use `--profile NAME` or `CRAKEN_PROFILE` only when you need more than one profile.
 
+Catalog text inputs accept inline text or a file, but not both. Use `--body-file -`
+for channel/DM stdin input and `--content-file -` for wiki stdin input. Text is
+read verbatim before the write request, including real newlines:
+
+```sh
+craken channel send --workspace test0 --channel general --body-file - <<'EOF'
+## Summary
+
+A multiline message.
+EOF
+```
+
 Dedicated message and wiki-history commands accept `--compact` for tab-separated summaries. They also accept `--fields LIST`, where `LIST` is a comma-separated set of dotted JSON paths such as `messages.id,messages.sender.name,messages.body`.

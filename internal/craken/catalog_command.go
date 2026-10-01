@@ -219,7 +219,7 @@ func catalogHTTPRequest(
 	if requestBody == "multipart" {
 		return "", requestSpec{}, fmt.Errorf("operation %s expects multipart request bodies", route.ID)
 	}
-	values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed)
+	values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed, nil)
 	if err != nil {
 		return "", requestSpec{}, err
 	}
@@ -240,7 +240,7 @@ func catalogHTTPRequest(
 		return path, spec, nil
 	}
 	if plan.BodyFields != nil {
-		body, err := catalogValues(ctx, client, routes, cmd, plan.BodyFields, resolved, consumed)
+		body, err := catalogValues(ctx, client, routes, cmd, plan.BodyFields, resolved, consumed, stdin)
 		if err != nil {
 			return "", requestSpec{}, err
 		}
@@ -253,7 +253,7 @@ func catalogHTTPRequest(
 
 func runCatalogDownloadCommand(ctx context.Context, client *client, routes []route, route route, plan commandExecution, cmd command, path string, resolved map[string]string, consumed map[string]bool, stdout io.Writer) error {
 	if plan.QueryParams != nil {
-		values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed)
+		values, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed, nil)
 		if err != nil {
 			return err
 		}
@@ -297,7 +297,7 @@ func runCatalogMultipartCommand(
 	if err != nil {
 		return err
 	}
-	fieldValues, err := catalogValues(ctx, client, routes, cmd, multipartPlan.Fields, resolved, consumed)
+	fieldValues, err := catalogValues(ctx, client, routes, cmd, multipartPlan.Fields, resolved, consumed, nil)
 	if err != nil {
 		return err
 	}

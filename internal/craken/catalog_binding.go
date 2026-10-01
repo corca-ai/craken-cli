@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,10 +20,11 @@ func catalogValues(
 	bindings map[string]commandBinding,
 	resolved map[string]string,
 	consumed map[string]bool,
+	stdin io.Reader,
 ) (map[string]any, error) {
 	values := map[string]any{}
 	for name, binding := range bindings {
-		value, ok, err := catalogBindingValue(ctx, client, routes, cmd, binding, resolved, consumed)
+		value, ok, err := catalogBindingValue(ctx, client, routes, cmd, binding, resolved, consumed, stdin)
 		if err != nil {
 			return nil, err
 		}
@@ -42,7 +44,7 @@ func catalogBindingString(
 	resolved map[string]string,
 	consumed map[string]bool,
 ) (string, error) {
-	value, ok, err := catalogBindingValue(ctx, client, routes, cmd, binding, resolved, consumed)
+	value, ok, err := catalogBindingValue(ctx, client, routes, cmd, binding, resolved, consumed, nil)
 	if err != nil {
 		return "", err
 	}
@@ -64,6 +66,7 @@ func catalogBindingValue(
 	binding commandBinding,
 	resolved map[string]string,
 	consumed map[string]bool,
+	stdin io.Reader,
 ) (any, bool, error) {
 	switch binding.Source {
 	case commandBindingSourceBearerToken:
@@ -86,7 +89,7 @@ func catalogBindingValue(
 		consumed[binding.Option] = true
 		return boolOption(cmd, binding.Option), true, nil
 	case commandBindingSourceText:
-		value, ok, err := textBindingValue(cmd, binding)
+		value, ok, err := textBindingValue(cmd, binding, stdin)
 		if err != nil || !ok {
 			// Only report the binding as missing when it is genuinely absent
 			// (err == nil); otherwise surface the real error (e.g. the
@@ -149,13 +152,20 @@ func bindingOptionNames(binding commandBinding) []string {
 	return names
 }
 
-func textBindingValue(cmd command, binding commandBinding) (string, bool, error) {
+func textBindingValue(cmd command, binding commandBinding, stdin io.Reader) (string, bool, error) {
 	value, valueSource, hasValue := bindingOptionValue(cmd, commandBinding{Option: binding.Option})
 	file, fileSource, hasFile := bindingOptionValue(cmd, commandBinding{Option: binding.FileOption})
 	if hasValue && hasFile {
 		return "", false, fmt.Errorf("use either --%s or --%s, not both", valueSource, fileSource)
 	}
 	if hasFile {
+		if file == "-" {
+			if stdin == nil {
+				return "", false, fmt.Errorf("stdin is unavailable for --%s", fileSource)
+			}
+			bytes, err := io.ReadAll(stdin)
+			return string(bytes), true, err
+		}
 		bytes, err := os.ReadFile(filepath.Clean(file))
 		return string(bytes), true, err
 	}

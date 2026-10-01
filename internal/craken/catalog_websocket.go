@@ -26,7 +26,7 @@ func runCatalogWebSocketCommand(
 	consumed map[string]bool,
 	stdout io.Writer,
 ) error {
-	query, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed)
+	query, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed, nil)
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func catalogWebSocketProtocols(
 				protocols = append(protocols, plan.Value)
 			}
 		case "json-payload":
-			values, err := catalogValues(ctx, client, routes, cmd, plan.Payload, resolved, consumed)
+			values, err := catalogValues(ctx, client, routes, cmd, plan.Payload, resolved, consumed, nil)
 			if err != nil {
 				return nil, err
 			}
