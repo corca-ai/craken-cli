@@ -85,6 +85,19 @@ func configPath() (string, error) {
 	return filepath.Join(home, ".config", "craken", "config.json"), nil
 }
 
+func selectedBaseURL(cmd command, prof profile) string {
+	if value := cmd.string("base-url", ""); value != "" {
+		return value
+	}
+	if value := trim(prof.BaseURL); value != "" {
+		return value
+	}
+	if value := getenvTrim("CRAKEN_BASE_URL"); value != "" {
+		return value
+	}
+	return defaultBaseURL
+}
+
 func selectedBearerToken(cmd command, prof profile) string {
 	if value := cmd.string("bearer-token", ""); value != "" {
 		return value
