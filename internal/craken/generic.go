@@ -16,20 +16,21 @@ import (
 var pathParamPattern = regexp.MustCompile(`\{([^}/]+)\}`)
 
 type route struct {
-	ID              string         `json:"id"`
-	Method          string         `json:"method"`
-	Path            string         `json:"path"`
-	Description     string         `json:"description"`
-	Auth            string         `json:"auth"`
-	Capability      string         `json:"capability,omitempty"`
-	PathParams      []catalogField `json:"pathParams,omitempty"`
-	PathParameters  []catalogField `json:"pathParameters,omitempty"`
-	QueryParams     []catalogField `json:"queryParams,omitempty"`
-	QueryParameters []catalogField `json:"queryParameters,omitempty"`
-	BodyFields      []catalogField `json:"bodyFields,omitempty"`
-	RequestBody     string         `json:"requestBody"`
-	ResponseExample any            `json:"responseExample,omitempty"`
-	Stream          string         `json:"stream,omitempty"`
+	ID              string            `json:"id"`
+	Execution       *commandExecution `json:"execution,omitempty"`
+	Method          string            `json:"method"`
+	Path            string            `json:"path"`
+	Description     string            `json:"description"`
+	Auth            string            `json:"auth"`
+	Capability      string            `json:"capability,omitempty"`
+	PathParams      []catalogField    `json:"pathParams,omitempty"`
+	PathParameters  []catalogField    `json:"pathParameters,omitempty"`
+	QueryParams     []catalogField    `json:"queryParams,omitempty"`
+	QueryParameters []catalogField    `json:"queryParameters,omitempty"`
+	BodyFields      []catalogField    `json:"bodyFields,omitempty"`
+	RequestBody     string            `json:"requestBody"`
+	ResponseExample any               `json:"responseExample,omitempty"`
+	Stream          string            `json:"stream,omitempty"`
 }
 
 type clientCatalog struct {
@@ -184,6 +185,7 @@ type commandMultipartPlan struct {
 	FileNameDefault    string                    `json:"fileNameDefault,omitempty"`
 	FileNameOption     string                    `json:"fileNameOption,omitempty"`
 	FileOption         string                    `json:"fileOption,omitempty"`
+	FileOptional       bool                      `json:"fileOptional,omitempty"`
 }
 
 type commandWebSocketPlan struct {
@@ -256,7 +258,7 @@ func runCommands(ctx context.Context, client *client, cmd command, stdout io.Wri
 	return printJSON(stdout, value)
 }
 
-func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, stdin io.Reader) error {
+func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, stdin io.Reader, stderr io.Writer) error {
 	operationID := cmd.Action
 	if operationID == "" || operationID == "help" {
 		return fmt.Errorf("expected operation id")
@@ -278,6 +280,21 @@ func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, s
 	}
 	if selected == nil {
 		return fmt.Errorf("unknown operation: %s", operationID)
+	}
+	if selected.Execution != nil {
+		plan := selectedExecution(cliCommand{OperationID: selected.ID, Execution: *selected.Execution}, cmd)
+		if plan.Transport == "" {
+			plan.Transport = commandTransportHTTP
+		}
+		executionRoute := routeByID(routes, plan.OperationID)
+		if executionRoute == nil {
+			return fmt.Errorf("unknown operation for %s: %s", selected.ID, plan.OperationID)
+		}
+		path, resolved, consumed, err := discoveredRoutePath(ctx, client, routes, *executionRoute, cmd)
+		if err != nil {
+			return err
+		}
+		return executeCatalogTransport(ctx, client, routes, *executionRoute, plan, cmd, path, resolved, consumed, stdout, stdin, stderr)
 	}
 	if selected.Stream == "websocket" {
 		return fmt.Errorf("operation %s is a stream. Use the resource-specific tail command for realtime subscriptions", operationID)
@@ -430,7 +447,7 @@ func fieldResolverPlan(resolver catalogFieldResolver) commandResolverPlan {
 	return plan
 }
 
-func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []route, route route, cmd command, stdin io.Reader) (string, requestSpec, error) {
+func discoveredRoutePath(ctx context.Context, client *client, routes []route, route route, cmd command) (string, map[string]string, map[string]bool, error) {
 	consumed := map[string]bool{}
 	positionals := append([]string{}, cmd.Positionals...)
 	pathFields := catalogFieldIndex(firstCatalogFields(route.PathParams, route.PathParameters))
@@ -465,14 +482,22 @@ func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []ro
 		return url.PathEscape(value)
 	})
 	if resolveErr != nil {
-		return "", requestSpec{}, resolveErr
+		return "", nil, nil, resolveErr
 	}
 	if strings.Contains(path, "\x00missing:") {
 		name := strings.TrimPrefix(path[strings.Index(path, "\x00missing:"):], "\x00missing:")
-		return "", requestSpec{}, fmt.Errorf("expected --%s for %s", kebabCase(name), route.Path)
+		return "", nil, nil, fmt.Errorf("expected --%s for %s", kebabCase(name), route.Path)
 	}
 	if len(positionals) > 0 {
-		return "", requestSpec{}, fmt.Errorf("unexpected positional argument: %s", positionals[0])
+		return "", nil, nil, fmt.Errorf("unexpected positional argument: %s", positionals[0])
+	}
+	return path, resolved, consumed, nil
+}
+
+func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []route, route route, cmd command, stdin io.Reader) (string, requestSpec, error) {
+	path, _, consumed, err := discoveredRoutePath(ctx, client, routes, route, cmd)
+	if err != nil {
+		return "", requestSpec{}, err
 	}
 	values := requestValuesFromOptions(cmd, consumed)
 	explicitBody, hasExplicit, err := jsonBodyFromOptions(cmd, stdin)

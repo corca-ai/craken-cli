@@ -118,7 +118,7 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 	return response, nil
 }
 
-func (c *client) multipart(ctx context.Context, method string, path string, fields map[string]string, fileField string, filePath string, fileName string, contentType string) (any, error) {
+func (c *client) multipart(ctx context.Context, method string, path string, fields map[string]string, fileField string, filePath string, fileName string, contentType string, headers http.Header) (any, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	for key, value := range fields {
@@ -128,30 +128,31 @@ func (c *client) multipart(ctx context.Context, method string, path string, fiel
 			}
 		}
 	}
-	file, err := os.Open(filepath.Clean(filePath))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	partHeader := make(textproto.MIMEHeader)
-	partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes(fileField), escapeQuotes(fileName)))
-	partHeader.Set("Content-Type", contentType)
-	part, err := writer.CreatePart(partHeader)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := io.Copy(part, file); err != nil {
-		return nil, err
+	if filePath != "" {
+		file, err := os.Open(filepath.Clean(filePath))
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = file.Close() }()
+		partHeader := make(textproto.MIMEHeader)
+		partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes(fileField), escapeQuotes(fileName)))
+		partHeader.Set("Content-Type", contentType)
+		part, err := writer.CreatePart(partHeader)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			return nil, err
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
-	return c.jsonFromResponse(ctx, method, path, requestSpec{
-		Body: bytesReader(body.Bytes()),
-		Headers: http.Header{
-			"Content-Type": []string{writer.FormDataContentType()},
-		},
-	})
+	if headers == nil {
+		headers = http.Header{}
+	}
+	headers.Set("Content-Type", writer.FormDataContentType())
+	return c.jsonFromResponse(ctx, method, path, requestSpec{Body: bytesReader(body.Bytes()), Headers: headers})
 }
 
 func (c *client) jsonFromResponse(ctx context.Context, method string, path string, spec requestSpec) (any, error) {

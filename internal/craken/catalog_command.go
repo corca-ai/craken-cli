@@ -46,15 +46,19 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	if err != nil {
 		return err
 	}
+	return executeCatalogTransport(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin, stderr)
+}
+
+func executeCatalogTransport(ctx context.Context, client *client, routes []route, selectedRoute route, plan commandExecution, cmd command, requestPath string, resolved map[string]string, consumed map[string]bool, stdout io.Writer, stdin io.Reader, stderr io.Writer) error {
 	switch plan.Transport {
 	case commandTransportHTTP:
-		return runCatalogHTTPCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
+		return runCatalogHTTPCommand(ctx, client, routes, selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout, stdin)
 	case commandTransportDownload:
-		return runCatalogDownloadCommand(ctx, client, catalog.Routes, *selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout)
+		return runCatalogDownloadCommand(ctx, client, routes, selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportMultipart:
-		return runCatalogMultipartCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout)
+		return runCatalogMultipartCommand(ctx, client, routes, selectedRoute, plan, cmd, requestPath, resolved, consumed, stdout)
 	case commandTransportWebSocket:
-		return runCatalogWebSocketCommand(ctx, client, catalog.Routes, plan, cmd, requestPath, resolved, consumed, stdout, stderr)
+		return runCatalogWebSocketCommand(ctx, client, routes, plan, cmd, requestPath, resolved, consumed, stdout, stderr)
 	default:
 		return fmt.Errorf("unsupported catalog command transport: %s", plan.Transport)
 	}
@@ -189,6 +193,9 @@ func runCatalogHTTPCommand(
 	if err != nil {
 		return err
 	}
+	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), payload.Parsed); err != nil {
+		return err
+	}
 	return printCatalogCommandPayload(stdout, payload, cmd, plan.Output)
 }
 
@@ -259,7 +266,7 @@ func runCatalogDownloadCommand(ctx context.Context, client *client, routes []rou
 		}
 		path = appendQuery(path, values)
 	}
-	response, err := client.raw(ctx, route.Method, path, requestSpec{})
+	response, err := client.raw(ctx, route.Method, path, requestSpec{Headers: requestHeadersFromOptions(cmd)})
 	if err != nil {
 		return err
 	}
@@ -282,6 +289,7 @@ func runCatalogMultipartCommand(
 	ctx context.Context,
 	client *client,
 	routes []route,
+	route route,
 	plan commandExecution,
 	cmd command,
 	path string,
@@ -293,9 +301,13 @@ func runCatalogMultipartCommand(
 	if multipartPlan.FileOption == "" || multipartPlan.FileField == "" {
 		return fmt.Errorf("catalog command %s missing multipart plan", plan.OperationID)
 	}
-	filePath, err := cmd.required(multipartPlan.FileOption)
-	if err != nil {
-		return err
+	filePath := cmd.string(multipartPlan.FileOption, "")
+	if !multipartPlan.FileOptional {
+		var err error
+		filePath, err = cmd.required(multipartPlan.FileOption)
+		if err != nil {
+			return err
+		}
 	}
 	fieldValues, err := catalogValues(ctx, client, routes, cmd, multipartPlan.Fields, resolved, consumed, nil)
 	if err != nil {
@@ -309,14 +321,21 @@ func runCatalogMultipartCommand(
 	if multipartPlan.FileNameOption != "" {
 		fileName = cmd.string(multipartPlan.FileNameOption, "")
 	}
-	if fileName == "" && multipartPlan.FileNameDefault == "basename" {
+	if filePath != "" && fileName == "" && multipartPlan.FileNameDefault == "basename" {
 		fileName = filepath.Base(filePath)
 	}
 	contentType := multipartPlan.ContentTypeDefault
 	if multipartPlan.ContentTypeOption != "" {
 		contentType = cmd.string(multipartPlan.ContentTypeOption, contentType)
 	}
-	parsed, err := client.multipart(ctx, http.MethodPost, path, fields, multipartPlan.FileField, filePath, fileName, contentType)
+	if plan.QueryParams != nil {
+		query, err := catalogValues(ctx, client, routes, cmd, plan.QueryParams, resolved, consumed, nil)
+		if err != nil {
+			return err
+		}
+		path = appendQuery(path, query)
+	}
+	parsed, err := client.multipart(ctx, route.Method, path, fields, multipartPlan.FileField, filePath, fileName, contentType, requestHeadersFromOptions(cmd))
 	if err != nil {
 		return err
 	}
