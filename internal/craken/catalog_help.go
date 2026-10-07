@@ -37,7 +37,11 @@ func executionBindingHelpOptions(plan commandExecution) []string {
 	}
 	for name, value := range map[string]string{plan.Multipart.FileOption: "PATH", plan.Multipart.FileNameOption: "NAME", plan.Multipart.ContentTypeOption: "MIME"} {
 		if name != "" {
-			unique["--"+name+" "+value] = true
+			option := "--" + name + " " + value
+			if name == plan.Multipart.FileOption && plan.Multipart.FileOptional {
+				option += "  optional"
+			}
+			unique[option] = true
 		}
 	}
 	options := make([]string, 0, len(unique))
@@ -110,6 +114,9 @@ func localCommandHelpOptions(command cliCommand) []string {
 			fmt.Sprintf("--%s N              Poll interval in seconds.", command.Execution.Poll.IntervalOption),
 			fmt.Sprintf("--%s N             Maximum poll attempts.", command.Execution.Poll.MaxPollsOption),
 		)
+	}
+	if command.Execution.Transport == commandTransportDownload {
+		options = append(options, "--output PATH             Write downloaded bytes to a file instead of stdout.")
 	}
 	if command.Execution.Transport == commandTransportWebSocket {
 		options = append(
