@@ -58,7 +58,7 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	case "commands", "catalog":
 		return runCommands(ctx, client, cmd, stdout)
 	case "do":
-		return runDo(ctx, client, cmd, stdout, stdin)
+		return runDo(ctx, client, cmd, stdout, stdin, stderr)
 	case "get", "post", "put", "patch", "delete":
 		// For raw verbs the action slot is the path. A bare verb leaves Action ==
 		// "", and `craken get --help` leaves the "help" sentinel; drop the sentinel
@@ -260,10 +260,21 @@ func printFocusedCommandHelp(stdout io.Writer, cmd command, command *cliCommand,
 			}
 		}
 	}
-	if command != nil && cmd.Resource != "do" {
+	var optionPlan *cliCommand
+	if cmd.Resource == "do" && route != nil && route.Execution != nil {
+		effective := cliCommand{OperationID: route.ID, Execution: *route.Execution}
+		effective.Execution = selectedExecution(effective, cmd)
+		// Generic do addresses path parameters with route flags/positionals,
+		// not shortcut path bindings. They are documented once below.
+		effective.Execution.PathParams = nil
+		optionPlan = &effective
+	} else if command != nil && cmd.Resource != "do" {
 		effective := *command
 		effective.Execution = selectedExecution(*command, cmd)
-		if options := localCommandHelpOptions(effective); len(options) > 0 {
+		optionPlan = &effective
+	}
+	if optionPlan != nil {
+		if options := localCommandHelpOptions(*optionPlan); len(options) > 0 {
 			if _, err := fmt.Fprint(stdout, "\nOptions:\n"); err != nil {
 				return err
 			}
