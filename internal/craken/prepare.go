@@ -26,7 +26,7 @@ func validateLocalOptions(cmd command) error {
 		return fmt.Errorf("use only one of --json, --body-json or --json-file")
 	}
 	for name := range cmd.Flags {
-		if localOptions[name] && !localBooleanOptions[name] && !(cmd.Help && name == "json") {
+		if localOptions[name] && !localBooleanOptions[name] && (!cmd.Help || name != "json") {
 			return fmt.Errorf("expected value for --%s", name)
 		}
 	}

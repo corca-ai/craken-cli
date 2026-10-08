@@ -182,10 +182,10 @@ func validateCatalogInputs(cmd command, selected route, plan commandExecution, g
 			if binding.Positionals == commandBindingPositionalsJoin {
 				positionalText = true
 			}
-			if binding.Required && binding.Source != commandBindingSourceResolved && !(index == 2 && hasExplicitJSON(cmd)) {
+			if binding.Required && binding.Source != commandBindingSourceResolved && (index != 2 || !hasExplicitJSON(cmd)) {
 				_, _, exists := bindingOptionValue(cmd, binding)
 				_, hasFile := cmd.Options[binding.FileOption]
-				if !exists && !hasFile && binding.Default == nil && !(binding.Positionals == commandBindingPositionalsJoin && len(cmd.Positionals) > 0) {
+				if !exists && !hasFile && binding.Default == nil && (binding.Positionals != commandBindingPositionalsJoin || len(cmd.Positionals) == 0) {
 					return fmt.Errorf("expected --%s", binding.Option)
 				}
 			}
@@ -391,7 +391,7 @@ func validateRequiredInputs(cmd command, selected route, plan commandExecution, 
 			}
 			count := 0
 			for _, name := range bindingOptionNames(binding) {
-				if _, exists := optionValueExact(cmd, name); exists {
+				if hasExactOption(cmd, name) {
 					count++
 				}
 			}
@@ -412,7 +412,7 @@ func validateRequiredInputs(cmd command, selected route, plan commandExecution, 
 		for name, field := range schema.Properties {
 			count := 0
 			for _, alias := range optionAliases(name) {
-				if _, exists := optionValueExact(cmd, alias); exists {
+				if hasExactOption(cmd, alias) {
 					count++
 				}
 				if cmd.Flags[alias] && schemaType(field) != "boolean" {
@@ -444,12 +444,7 @@ func validateRequiredInputs(cmd command, selected route, plan commandExecution, 
 	return nil
 }
 
-func optionValueExact(cmd command, name string) (string, bool) {
-	if value, exists := cmd.Options[name]; exists {
-		return value, true
-	}
-	if value, exists := cmd.Flags[name]; exists && value {
-		return "true", true
-	}
-	return "", false
+func hasExactOption(cmd command, name string) bool {
+	_, exists := cmd.Options[name]
+	return exists || cmd.Flags[name]
 }

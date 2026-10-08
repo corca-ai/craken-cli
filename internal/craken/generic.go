@@ -499,38 +499,6 @@ func discoveredRoutePath(ctx context.Context, client *client, routes []route, ro
 	return path, resolved, consumed, nil
 }
 
-func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []route, route route, cmd command, stdin io.Reader) (string, requestSpec, error) {
-	path, _, consumed, err := discoveredRoutePath(ctx, client, routes, route, cmd)
-	if err != nil {
-		return "", requestSpec{}, err
-	}
-	values := requestValuesFromOptions(cmd, consumed)
-	explicitBody, hasExplicit, err := jsonBodyFromOptions(cmd, stdin)
-	if err != nil {
-		return "", requestSpec{}, err
-	}
-	requestBody := route.RequestBody
-	if requestBody == "" {
-		requestBody = defaultRequestBody(route.Method)
-	}
-	if requestBody == "multipart" {
-		return "", requestSpec{}, fmt.Errorf("operation %s expects multipart request bodies, which generic do does not support yet", route.ID)
-	}
-	if requestBody == "none" && hasExplicit {
-		return "", requestSpec{}, fmt.Errorf("operation %s does not accept a JSON body", route.ID)
-	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")}
-	if route.Method == http.MethodGet || (route.Method == http.MethodDelete && requestBody == "none") || requestBody == "none" {
-		return appendQuery(path, values), spec, nil
-	}
-	if hasExplicit {
-		spec.JSONBody = explicitBody
-	} else {
-		spec.JSONBody = compact(values)
-	}
-	return path, spec, nil
-}
-
 func rawRequestFromOptions(method string, cmd command, stdin io.Reader) (requestSpec, error) {
 	body, hasBody, err := jsonBodyFromOptions(cmd, stdin)
 	if err != nil {
@@ -759,17 +727,6 @@ func optionAliases(name string) []string {
 		return []string{name}
 	}
 	return []string{name, kebab}
-}
-
-func acceptFromFormat(format string) string {
-	switch format {
-	case "text", "raw":
-		return "text/plain, */*"
-	case "json", "ndjson", "":
-		return "application/json"
-	default:
-		return ""
-	}
 }
 
 func camelCase(name string) string {
