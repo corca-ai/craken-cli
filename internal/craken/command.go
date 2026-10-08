@@ -25,9 +25,13 @@ type command struct {
 	Help        bool
 }
 
-func Run(ctx context.Context, version string, args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+func Run(ctx context.Context, version string, args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) (resultErr error) {
+	defer func() { resultErr = stageError("prepare", resultErr, nil) }()
 	cmd, err := parseCommand(args)
 	if err != nil {
+		return err
+	}
+	if err := validateLocalOptions(cmd); err != nil {
 		return err
 	}
 	logger, err := newLogger(cmd.string("log-file", ""))
@@ -45,10 +49,6 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	}
 	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
 		return runHelp(ctx, cmd, logger, stdout, stderr)
-	}
-
-	if err := validateLocalOptions(cmd); err != nil {
-		return err
 	}
 
 	if cmd.Resource == "auth" {
@@ -629,6 +629,11 @@ Generic request options:
   --json-file PATH         JSON request body file.
   --format json|ndjson|text|raw|none
   --accept MIME            Override the HTTP Accept header.
+  --header "Name: value"   Repeatable HTTP header; credentials use profile/token.
+  --query "name=value"     Repeatable raw query parameter.
+  --http-timeout DURATION  Transport deadline (default 120s).
+  --response-meta FILE     Write response status/headers independently of stdout.
+  --error-format json      Structured diagnostics on stderr.
   --save-token-profile NAME
 `); err != nil {
 		return err

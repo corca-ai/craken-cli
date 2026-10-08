@@ -16,6 +16,20 @@ var localOptions = map[string]bool{
 }
 
 func validateLocalOptions(cmd command) error {
+	jsonSources := 0
+	for _, name := range []string{"json", "body-json", "json-file"} {
+		if _, exists := cmd.Options[name]; exists {
+			jsonSources++
+		}
+	}
+	if jsonSources > 1 {
+		return fmt.Errorf("use only one of --json, --body-json or --json-file")
+	}
+	for name := range cmd.Flags {
+		if localOptions[name] && !localBooleanOptions[name] && !(cmd.Help && name == "json") {
+			return fmt.Errorf("expected value for --%s", name)
+		}
+	}
 	switch format := cmd.string("format", ""); format {
 	case "", "json", "ndjson", "text", "raw", "none":
 	default:
@@ -120,6 +134,11 @@ func reparseCatalogCommand(cmd command, plan commandExecution, selected route) (
 			}
 		}
 	}
+	if plan.Transport == commandTransportWebSocket {
+		for _, name := range []string{"messages", "resume", "reconnect", "once"} {
+			flags[name] = true
+		}
+	}
 	if selected.Specification != nil {
 		for _, schema := range []wireSchema{selected.Specification.Wire.Query, selected.Specification.Wire.Body} {
 			for name, field := range schema.Properties {
@@ -130,7 +149,11 @@ func reparseCatalogCommand(cmd command, plan commandExecution, selected route) (
 			}
 		}
 	}
-	return parseCommandWithFlags(cmd.RawArgs, flags)
+	parsed, err := parseCommandWithFlags(cmd.RawArgs, flags)
+	if err != nil {
+		return parsed, err
+	}
+	return normalizeArrayOptions(parsed, selected, plan)
 }
 
 // Validate execution meaning only for the selected plan; unknown catalog descriptions remain discoverable.
@@ -147,10 +170,34 @@ func validatePlan(plan commandExecution, cmd command) error {
 			default:
 				return fmt.Errorf("unsupported catalog binding source: %s", binding.Source)
 			}
+			switch binding.Positionals {
+			case "", commandBindingPositionalsJoin:
+			default:
+				return fmt.Errorf("unsupported catalog positional binding: %s", binding.Positionals)
+			}
 			switch binding.Type {
 			case "", "string", commandBindingValueTypeInteger, commandBindingValueTypeJSON:
 			default:
 				return fmt.Errorf("unsupported catalog binding type: %s", binding.Type)
+			}
+		}
+	}
+	for _, protocol := range plan.WebSocket.Protocols {
+		switch protocol.Source {
+		case "literal", "json-payload":
+		default:
+			return fmt.Errorf("unsupported websocket protocol source: %s", protocol.Source)
+		}
+		for _, binding := range protocol.Payload {
+			switch binding.Type {
+			case "", "string", commandBindingValueTypeInteger, commandBindingValueTypeJSON:
+			default:
+				return fmt.Errorf("unsupported websocket binding type: %s", binding.Type)
+			}
+			switch binding.Source {
+			case commandBindingSourceLiteral, commandBindingSourceBearerToken, commandBindingSourceOption, commandBindingSourceFlag, commandBindingSourceResolved:
+			default:
+				return fmt.Errorf("unsupported websocket payload binding: %s", binding.Source)
 			}
 		}
 	}
@@ -194,7 +241,14 @@ func httpTimeout(cmd command) time.Duration {
 }
 func downloadHeaders(cmd command) http.Header {
 	headers := requestHeadersFromOptions(cmd)
-	if cmd.string("accept", "") == "" && len(cmd.Values["header"]) == 0 {
+	explicit := cmd.string("accept", "") != ""
+	for _, input := range cmd.Values["header"] {
+		name, _, _ := strings.Cut(input, ":")
+		if strings.EqualFold(strings.TrimSpace(name), "Accept") {
+			explicit = true
+		}
+	}
+	if !explicit {
 		headers.Set("Accept", "*/*")
 	}
 	return headers

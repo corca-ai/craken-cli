@@ -72,3 +72,41 @@ func TestWireInputsAndPrepareFailures(t *testing.T) {
 		t.Fatalf("writes=%d", writes.Load())
 	}
 }
+
+func TestDeclaredStringAndJSONBindingsKeepTheirValues(t *testing.T) {
+	schema := wireSchema{Properties: map[string]wireField{"value": {AnyOf: []wireField{{Type: "string"}, {Type: "null"}}}}}
+	for _, binding := range []commandBinding{{Source: commandBindingSourceOption, Type: "string"}, {Source: commandBindingSourceText}, {Source: commandBindingSourceOption, Type: commandBindingValueTypeJSON}, {Source: commandBindingSourceOption}} {
+		values, err := convertBoundWire(map[string]any{"value": "null"}, schema, map[string]commandBinding{"value": binding})
+		if err != nil || values["value"] != "null" {
+			t.Fatalf("binding=%+v values=%v err=%v", binding, values, err)
+		}
+	}
+	cmd, err := parseCommand([]string{"do", "future.write", "--tags", "false", "--tags", "null", "--tags", "123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := route{Specification: &operationSpecification{}}
+	selected.Specification.Wire.Body = wireSchema{Properties: map[string]wireField{"tags": {Type: "array", Items: &wireField{Type: "string"}}}}
+	normalized, err := normalizeArrayOptions(cmd, selected, commandExecution{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Options["tags"] != `["false","null","123"]` {
+		t.Fatalf("string items=%s", normalized.Options["tags"])
+	}
+	path, err := appendWireQuery("/future", map[string]any{"nullable": nil}, route{})
+	if err != nil || path != "/future?nullable=null" {
+		t.Fatalf("null query=%s err=%v", path, err)
+	}
+}
+
+func TestShortcutAliasesRequireValuesBeforeResolverReads(t *testing.T) {
+	plan := commandExecution{Transport: commandTransportHTTP, PathParams: map[string]commandBinding{"pageTitle": {Source: commandBindingSourceOption, Option: "existing-title", Required: true}}, BodyFields: map[string]commandBinding{"content": {Source: commandBindingSourceText, Option: "content", FileOption: "content-file"}}}
+	selected := route{Specification: &operationSpecification{}}
+	for _, name := range []string{"existing-title", "content-file"} {
+		cmd := command{Options: map[string]string{"existing-title": "page"}, Flags: map[string]bool{name: true}}
+		if err := validateCatalogInputs(cmd, selected, plan, false); err == nil {
+			t.Fatalf("bare --%s accepted", name)
+		}
+	}
+}

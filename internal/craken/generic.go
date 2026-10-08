@@ -149,6 +149,7 @@ type commandBinding struct {
 }
 
 type commandResolverPlan struct {
+	IDPattern            string                    `json:"idPattern,omitempty"`
 	CollectionPath       string                    `json:"collectionPath"`
 	Label                string                    `json:"label"`
 	MatchFields          []string                  `json:"matchFields"`
@@ -226,6 +227,7 @@ type catalogField struct {
 // name. The server advertises it on route path params so generic callers (do/get)
 // can resolve names, and so help can show that a parameter accepts a name.
 type catalogFieldResolver struct {
+	IDPattern            string   `json:"idPattern,omitempty"`
 	CollectionPath       string   `json:"collectionPath"`
 	Label                string   `json:"label"`
 	MatchFields          []string `json:"matchFields"`
@@ -336,7 +338,7 @@ func runRawHTTP(ctx context.Context, client *client, method string, path string,
 		return err
 	}
 	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), payload.Parsed); err != nil {
-		return err
+		return stageError("local-persist", err, payload.Evidence)
 	}
 	return printPayload(stdout, payload, cmd)
 }
@@ -433,6 +435,7 @@ func catalogFieldIndex(fields []catalogField) map[string]catalogField {
 // resolved path values.
 func fieldResolverPlan(resolver catalogFieldResolver) commandResolverPlan {
 	plan := commandResolverPlan{
+		IDPattern:            resolver.IDPattern,
 		CollectionPath:       resolver.CollectionPath,
 		Label:                resolver.Label,
 		MatchFields:          resolver.MatchFields,
@@ -516,7 +519,7 @@ func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []ro
 	if requestBody == "none" && hasExplicit {
 		return "", requestSpec{}, fmt.Errorf("operation %s does not accept a JSON body", route.ID)
 	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")}
 	if route.Method == http.MethodGet || (route.Method == http.MethodDelete && requestBody == "none") || requestBody == "none" {
 		return appendQuery(path, values), spec, nil
 	}
@@ -539,7 +542,7 @@ func rawRequestFromOptions(method string, cmd command, stdin io.Reader) (request
 		}
 		hasBody = true
 	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")}
 	if hasBody && method != http.MethodGet {
 		spec.JSONBody = body
 		spec.HasJSONBody = true
@@ -596,30 +599,47 @@ func jsonBodyFromOptions(cmd command, stdin io.Reader) (any, bool, error) {
 }
 
 type responsePayload struct {
-	Parsed any
-	Text   string
+	Evidence *responseEvidence
+	NoBody   bool
+	Parsed   any
+	Text     string
 }
 
 func readPayload(response *http.Response, method string, path string) (responsePayload, error) {
 	defer func() { _ = response.Body.Close() }()
+	evidence := responseInfo(response)
 	bytes, err := io.ReadAll(response.Body)
 	if err != nil {
-		return responsePayload{}, err
+		return responsePayload{}, stageError("decode", err, evidence)
 	}
 	text := string(bytes)
+	if (response.StatusCode < 200 || response.StatusCode >= 300) && response.StatusCode != http.StatusNotModified {
+		return responsePayload{}, httpFailure(response, method, path, text)
+	}
+	if response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotModified {
+		return responsePayload{Evidence: evidence, NoBody: true}, nil
+	}
 	var parsed any
 	if text != "" && strings.Contains(response.Header.Get("Content-Type"), "json") {
 		if err := json.Unmarshal(bytes, &parsed); err != nil {
-			return responsePayload{}, err
+			return responsePayload{}, stageError("decode", err, evidence)
 		}
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return responsePayload{}, fmt.Errorf("%s %s failed with %d: %s", method, path, response.StatusCode, text)
-	}
-	return responsePayload{Parsed: parsed, Text: text}, nil
+	return responsePayload{Evidence: evidence, Parsed: parsed, Text: text}, nil
 }
 
-func printPayload(stdout io.Writer, payload responsePayload, cmd command) error {
+func printPayload(stdout io.Writer, payload responsePayload, cmd command) (resultErr error) {
+	defer func() { resultErr = stageError("output", resultErr, payload.Evidence) }()
+	if payload.NoBody {
+		return nil
+	}
+	if fields := cmd.string("fields", ""); fields != "" {
+		projected, err := projectFields(payload.Parsed, fields)
+		if err != nil {
+			return err
+		}
+		payload.Parsed = projected
+	}
 	format := cmd.string("format", "")
 	if format == "" {
 		if payload.Parsed == nil {
@@ -632,6 +652,13 @@ func printPayload(stdout io.Writer, payload responsePayload, cmd command) error 
 	case "none":
 		return nil
 	case "text", "raw":
+		if payload.Text == "" && payload.Parsed != nil {
+			encoded, err := json.Marshal(payload.Parsed)
+			if err != nil {
+				return err
+			}
+			payload.Text = string(encoded)
+		}
 		if _, err := fmt.Fprint(stdout, payload.Text); err != nil {
 			return err
 		}
@@ -704,6 +731,8 @@ func appendQuery(path string, values map[string]any) string {
 // scalars keep their plain fmt.Sprint rendering.
 func queryParamString(value any) string {
 	switch value.(type) {
+	case nil:
+		return "null"
 	case map[string]any, []any:
 		if encoded, err := json.Marshal(value); err == nil {
 			return string(encoded)
@@ -756,7 +785,7 @@ func camelCase(name string) string {
 func kebabCase(name string) string {
 	var out strings.Builder
 	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
+		if i > 0 && r >= 'A' && r <= 'Z' && name[i-1] != '-' {
 			out.WriteByte('-')
 		}
 		out.WriteRune(r)

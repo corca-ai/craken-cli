@@ -7,19 +7,8 @@ import (
 )
 
 func printCommandOutput(stdout io.Writer, value any, cmd command, plan commandOutputPlan) error {
-	fields := cmd.string("fields", "")
-	if boolOption(cmd, "compact") && fields != "" {
-		return fmt.Errorf("use either --compact or --fields, not both")
-	}
-	if fields != "" {
-		projected, err := projectFields(value, fields)
-		if err != nil {
-			return err
-		}
-		return printJSON(stdout, projected)
-	}
 	if !boolOption(cmd, "compact") {
-		return printJSON(stdout, value)
+		return printPayload(stdout, responsePayload{Parsed: value}, cmd)
 	}
 	if plan.Mode != commandOutputModeTable {
 		return fmt.Errorf("--compact is not supported for this command")

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 )
 
@@ -49,6 +48,10 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	plan = selectedExecution(*serverCommand, cmd)
 	if plan.Transport == "" {
 		plan.Transport = commandTransportHTTP
+	}
+	selectedRoute = routeByID(catalog.Routes, plan.OperationID)
+	if selectedRoute == nil {
+		return fmt.Errorf("unknown selected operation: %s", plan.OperationID)
 	}
 	if err := validateCatalogInputs(cmd, *selectedRoute, plan, false); err != nil {
 		return err
@@ -205,7 +208,7 @@ func runCatalogHTTPCommand(
 		return err
 	}
 	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), payload.Parsed); err != nil {
-		return err
+		return stageError("local-persist", err, payload.Evidence)
 	}
 	return printCatalogCommandPayload(stdout, payload, cmd, plan.Output)
 }
@@ -222,7 +225,8 @@ func catalogHTTPRequest(
 	consumed map[string]bool,
 	stdin io.Reader,
 ) (string, requestSpec, error) {
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")}
+	wireHeaders(spec.Headers, cmd, route)
 	explicitBody, hasExplicitBody, err := jsonBodyFromOptions(cmd, stdin)
 	if err != nil {
 		return "", requestSpec{}, err
@@ -245,7 +249,7 @@ func catalogHTTPRequest(
 		if plan.QueryParams == nil {
 			values, err = wireOptions(cmd, route.Specification.Wire.Query)
 		} else {
-			values, err = convertBoundWire(values, route.Specification.Wire.Query)
+			values, err = convertBoundWire(values, route.Specification.Wire.Query, plan.QueryParams)
 		}
 		if err != nil {
 			return "", requestSpec{}, err
@@ -277,7 +281,7 @@ func catalogHTTPRequest(
 			return "", requestSpec{}, err
 		}
 		if route.Specification != nil {
-			body, err = convertBoundWire(body, route.Specification.Wire.Body)
+			body, err = convertBoundWire(body, route.Specification.Wire.Body, plan.BodyFields)
 			if err != nil {
 				return "", requestSpec{}, err
 			}
@@ -308,23 +312,33 @@ func runCatalogDownloadCommand(ctx context.Context, client *client, routes []rou
 			return err
 		}
 	}
-	response, err := client.raw(ctx, route.Method, path, requestSpec{Headers: downloadHeaders(cmd), Query: rawQuery(cmd)})
+	headers := downloadHeaders(cmd)
+	wireHeaders(headers, cmd, route)
+	response, err := client.raw(ctx, route.Method, path, requestSpec{Headers: headers, Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	bytes, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
+	evidence := responseInfo(response)
+	if response.StatusCode == http.StatusNotModified {
+		return nil
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("%s %s failed with %d: %s", route.Method, path, response.StatusCode, string(bytes))
+		bytes, err := io.ReadAll(response.Body)
+		if err != nil {
+			return stageError("decode", err, evidence)
+		}
+		return httpFailure(response, route.Method, path, string(bytes))
+	}
+	if cmd.string("format", "") == "none" {
+		_, err = io.Copy(io.Discard, response.Body)
+		return stageError("decode", err, evidence)
 	}
 	if output := cmd.string("output", ""); output != "" {
-		return os.WriteFile(filepath.Clean(output), bytes, 0o600)
+		return stageError("output", writeDownload(output, response.Body), evidence)
 	}
-	_, err = stdout.Write(bytes)
-	return err
+	_, err = io.Copy(stdout, response.Body)
+	return stageError("output", err, evidence)
 }
 
 func runCatalogMultipartCommand(
@@ -380,14 +394,23 @@ func runCatalogMultipartCommand(
 			return err
 		}
 	}
-	parsed, err := client.multipart(ctx, route.Method, path, fields, multipartPlan.FileField, filePath, fileName, contentType, requestHeadersFromOptions(cmd))
+	headers := requestHeadersFromOptions(cmd)
+	wireHeaders(headers, cmd, route)
+	parsed, err := client.multipart(ctx, route.Method, path, fields, multipartPlan.FileField, filePath, fileName, contentType, headers, cmd)
 	if err != nil {
 		return err
 	}
-	return printCatalogCommandPayload(stdout, responsePayload{Parsed: parsed}, cmd, plan.Output)
+	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), parsed); err != nil {
+		return stageError("local-persist", err, client.lastResponse)
+	}
+	return printCatalogCommandPayload(stdout, responsePayload{Parsed: parsed, Evidence: client.lastResponse, NoBody: client.lastResponse != nil && (client.lastResponse.Status == http.StatusNoContent || client.lastResponse.Status == http.StatusNotModified)}, cmd, plan.Output)
 }
 
-func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output *commandOutputPlan) error {
+func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output *commandOutputPlan) (resultErr error) {
+	defer func() { resultErr = stageError("output", resultErr, payload.Evidence) }()
+	if payload.NoBody {
+		return nil
+	}
 	if output == nil {
 		return printPayload(stdout, payload, cmd)
 	}
