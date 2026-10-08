@@ -16,21 +16,22 @@ import (
 var pathParamPattern = regexp.MustCompile(`\{([^}/]+)\}`)
 
 type route struct {
-	ID              string            `json:"id"`
-	Execution       *commandExecution `json:"execution,omitempty"`
-	Method          string            `json:"method"`
-	Path            string            `json:"path"`
-	Description     string            `json:"description"`
-	Auth            string            `json:"auth"`
-	Capability      string            `json:"capability,omitempty"`
-	PathParams      []catalogField    `json:"pathParams,omitempty"`
-	PathParameters  []catalogField    `json:"pathParameters,omitempty"`
-	QueryParams     []catalogField    `json:"queryParams,omitempty"`
-	QueryParameters []catalogField    `json:"queryParameters,omitempty"`
-	BodyFields      []catalogField    `json:"bodyFields,omitempty"`
-	RequestBody     string            `json:"requestBody"`
-	ResponseExample any               `json:"responseExample,omitempty"`
-	Stream          string            `json:"stream,omitempty"`
+	Specification   *operationSpecification `json:"specification,omitempty"`
+	ID              string                  `json:"id"`
+	Execution       *commandExecution       `json:"execution,omitempty"`
+	Method          string                  `json:"method"`
+	Path            string                  `json:"path"`
+	Description     string                  `json:"description"`
+	Auth            string                  `json:"auth"`
+	Capability      string                  `json:"capability,omitempty"`
+	PathParams      []catalogField          `json:"pathParams,omitempty"`
+	PathParameters  []catalogField          `json:"pathParameters,omitempty"`
+	QueryParams     []catalogField          `json:"queryParams,omitempty"`
+	QueryParameters []catalogField          `json:"queryParameters,omitempty"`
+	BodyFields      []catalogField          `json:"bodyFields,omitempty"`
+	RequestBody     string                  `json:"requestBody"`
+	ResponseExample any                     `json:"responseExample,omitempty"`
+	Stream          string                  `json:"stream,omitempty"`
 }
 
 type clientCatalog struct {
@@ -148,6 +149,7 @@ type commandBinding struct {
 }
 
 type commandResolverPlan struct {
+	IDPattern            string                    `json:"idPattern,omitempty"`
 	CollectionPath       string                    `json:"collectionPath"`
 	Label                string                    `json:"label"`
 	MatchFields          []string                  `json:"matchFields"`
@@ -225,6 +227,7 @@ type catalogField struct {
 // name. The server advertises it on route path params so generic callers (do/get)
 // can resolve names, and so help can show that a parameter accepts a name.
 type catalogFieldResolver struct {
+	IDPattern            string   `json:"idPattern,omitempty"`
 	CollectionPath       string   `json:"collectionPath"`
 	Label                string   `json:"label"`
 	MatchFields          []string `json:"matchFields"`
@@ -290,31 +293,32 @@ func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, s
 		if executionRoute == nil {
 			return fmt.Errorf("unknown operation for %s: %s", selected.ID, plan.OperationID)
 		}
+		cmd, err = reparseCatalogCommand(cmd, plan, *executionRoute)
+		if err != nil {
+			return err
+		}
+		if err := validateCatalogInputs(cmd, *executionRoute, plan, true); err != nil {
+			return err
+		}
 		path, resolved, consumed, err := discoveredRoutePath(ctx, client, routes, *executionRoute, cmd)
 		if err != nil {
 			return err
 		}
 		return executeCatalogTransport(ctx, client, routes, *executionRoute, plan, cmd, path, resolved, consumed, stdout, stdin, stderr)
 	}
-	if selected.Stream == "websocket" {
-		return fmt.Errorf("operation %s is a stream. Use the resource-specific tail command for realtime subscriptions", operationID)
-	}
-	requestPath, spec, err := requestFromDiscoveredRoute(ctx, client, routes, *selected, cmd, stdin)
+	plan := commandExecution{OperationID: selected.ID, Transport: commandTransportHTTP}
+	cmd, err = reparseCatalogCommand(cmd, plan, *selected)
 	if err != nil {
 		return err
 	}
-	response, err := client.raw(ctx, selected.Method, requestPath, spec)
+	if err := validateCatalogInputs(cmd, *selected, plan, true); err != nil {
+		return err
+	}
+	path, resolved, consumed, err := discoveredRoutePath(ctx, client, routes, *selected, cmd)
 	if err != nil {
 		return err
 	}
-	payload, err := readPayload(response, selected.Method, requestPath)
-	if err != nil {
-		return err
-	}
-	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), payload.Parsed); err != nil {
-		return err
-	}
-	return printPayload(stdout, payload, cmd)
+	return executeCatalogTransport(ctx, client, routes, *selected, plan, cmd, path, resolved, consumed, stdout, stdin, stderr)
 }
 
 func runRawHTTP(ctx context.Context, client *client, method string, path string, cmd command, stdout io.Writer, stdin io.Reader) error {
@@ -334,7 +338,7 @@ func runRawHTTP(ctx context.Context, client *client, method string, path string,
 		return err
 	}
 	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), payload.Parsed); err != nil {
-		return err
+		return stageError("local-persist", err, payload.Evidence)
 	}
 	return printPayload(stdout, payload, cmd)
 }
@@ -431,6 +435,7 @@ func catalogFieldIndex(fields []catalogField) map[string]catalogField {
 // resolved path values.
 func fieldResolverPlan(resolver catalogFieldResolver) commandResolverPlan {
 	plan := commandResolverPlan{
+		IDPattern:            resolver.IDPattern,
 		CollectionPath:       resolver.CollectionPath,
 		Label:                resolver.Label,
 		MatchFields:          resolver.MatchFields,
@@ -494,38 +499,6 @@ func discoveredRoutePath(ctx context.Context, client *client, routes []route, ro
 	return path, resolved, consumed, nil
 }
 
-func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []route, route route, cmd command, stdin io.Reader) (string, requestSpec, error) {
-	path, _, consumed, err := discoveredRoutePath(ctx, client, routes, route, cmd)
-	if err != nil {
-		return "", requestSpec{}, err
-	}
-	values := requestValuesFromOptions(cmd, consumed)
-	explicitBody, hasExplicit, err := jsonBodyFromOptions(cmd, stdin)
-	if err != nil {
-		return "", requestSpec{}, err
-	}
-	requestBody := route.RequestBody
-	if requestBody == "" {
-		requestBody = defaultRequestBody(route.Method)
-	}
-	if requestBody == "multipart" {
-		return "", requestSpec{}, fmt.Errorf("operation %s expects multipart request bodies, which generic do does not support yet", route.ID)
-	}
-	if requestBody == "none" && hasExplicit {
-		return "", requestSpec{}, fmt.Errorf("operation %s does not accept a JSON body", route.ID)
-	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd)}
-	if route.Method == http.MethodGet || (route.Method == http.MethodDelete && requestBody == "none") || requestBody == "none" {
-		return appendQuery(path, values), spec, nil
-	}
-	if hasExplicit {
-		spec.JSONBody = explicitBody
-	} else {
-		spec.JSONBody = compact(values)
-	}
-	return path, spec, nil
-}
-
 func rawRequestFromOptions(method string, cmd command, stdin io.Reader) (requestSpec, error) {
 	body, hasBody, err := jsonBodyFromOptions(cmd, stdin)
 	if err != nil {
@@ -537,20 +510,27 @@ func rawRequestFromOptions(method string, cmd command, stdin io.Reader) (request
 		}
 		hasBody = true
 	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")}
 	if hasBody && method != http.MethodGet {
 		spec.JSONBody = body
+		spec.HasJSONBody = true
 	}
 	return spec, nil
 }
 
 func requestHeadersFromOptions(cmd command) http.Header {
 	headers := http.Header{}
+	for _, input := range cmd.Values["header"] {
+		name, value, ok := strings.Cut(input, ":")
+		if ok {
+			headers.Add(strings.TrimSpace(name), strings.TrimSpace(value))
+		}
+	}
 	accept := cmd.string("accept", "")
 	if accept == "" {
-		accept = acceptFromFormat(cmd.string("format", ""))
+		accept = "application/json"
 	}
-	if accept != "" {
+	if accept != "" && headers.Get("Accept") == "" {
 		headers.Set("Accept", accept)
 	}
 	return headers
@@ -587,30 +567,47 @@ func jsonBodyFromOptions(cmd command, stdin io.Reader) (any, bool, error) {
 }
 
 type responsePayload struct {
-	Parsed any
-	Text   string
+	Evidence *responseEvidence
+	NoBody   bool
+	Parsed   any
+	Text     string
 }
 
 func readPayload(response *http.Response, method string, path string) (responsePayload, error) {
 	defer func() { _ = response.Body.Close() }()
+	evidence := responseInfo(response)
 	bytes, err := io.ReadAll(response.Body)
 	if err != nil {
-		return responsePayload{}, err
+		return responsePayload{}, stageError("decode", err, evidence)
 	}
 	text := string(bytes)
+	if (response.StatusCode < 200 || response.StatusCode >= 300) && response.StatusCode != http.StatusNotModified {
+		return responsePayload{}, httpFailure(response, method, path, text)
+	}
+	if response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotModified {
+		return responsePayload{Evidence: evidence, NoBody: true}, nil
+	}
 	var parsed any
 	if text != "" && strings.Contains(response.Header.Get("Content-Type"), "json") {
 		if err := json.Unmarshal(bytes, &parsed); err != nil {
-			return responsePayload{}, err
+			return responsePayload{}, stageError("decode", err, evidence)
 		}
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return responsePayload{}, fmt.Errorf("%s %s failed with %d: %s", method, path, response.StatusCode, text)
-	}
-	return responsePayload{Parsed: parsed, Text: text}, nil
+	return responsePayload{Evidence: evidence, Parsed: parsed, Text: text}, nil
 }
 
-func printPayload(stdout io.Writer, payload responsePayload, cmd command) error {
+func printPayload(stdout io.Writer, payload responsePayload, cmd command) (resultErr error) {
+	defer func() { resultErr = stageError("output", resultErr, payload.Evidence) }()
+	if payload.NoBody {
+		return nil
+	}
+	if fields := cmd.string("fields", ""); fields != "" {
+		projected, err := projectFields(payload.Parsed, fields)
+		if err != nil {
+			return err
+		}
+		payload.Parsed = projected
+	}
 	format := cmd.string("format", "")
 	if format == "" {
 		if payload.Parsed == nil {
@@ -623,6 +620,13 @@ func printPayload(stdout io.Writer, payload responsePayload, cmd command) error 
 	case "none":
 		return nil
 	case "text", "raw":
+		if payload.Text == "" && payload.Parsed != nil {
+			encoded, err := json.Marshal(payload.Parsed)
+			if err != nil {
+				return err
+			}
+			payload.Text = string(encoded)
+		}
 		if _, err := fmt.Fprint(stdout, payload.Text); err != nil {
 			return err
 		}
@@ -647,6 +651,7 @@ func printPayload(stdout io.Writer, payload responsePayload, cmd command) error 
 
 func requestValuesFromOptions(cmd command, consumed map[string]bool) map[string]any {
 	generic := map[string]bool{
+		"header": true, "query": true, "http-timeout": true, "response-meta": true, "error-format": true,
 		"accept": true, "base-url": true, "body-file": true, "body-json": true, "format": true,
 		"json": true, "json-file": true, "log-file": true, "profile": true, "save-token-profile": true,
 		"token": true, "bearer-token": true,
@@ -694,6 +699,8 @@ func appendQuery(path string, values map[string]any) string {
 // scalars keep their plain fmt.Sprint rendering.
 func queryParamString(value any) string {
 	switch value.(type) {
+	case nil:
+		return "null"
 	case map[string]any, []any:
 		if encoded, err := json.Marshal(value); err == nil {
 			return string(encoded)
@@ -722,17 +729,6 @@ func optionAliases(name string) []string {
 	return []string{name, kebab}
 }
 
-func acceptFromFormat(format string) string {
-	switch format {
-	case "text", "raw":
-		return "text/plain, */*"
-	case "json", "ndjson", "":
-		return "application/json"
-	default:
-		return ""
-	}
-}
-
 func camelCase(name string) string {
 	parts := strings.Split(name, "-")
 	for i := 1; i < len(parts); i++ {
@@ -746,7 +742,7 @@ func camelCase(name string) string {
 func kebabCase(name string) string {
 	var out strings.Builder
 	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
+		if i > 0 && r >= 'A' && r <= 'Z' && name[i-1] != '-' {
 			out.WriteByte('-')
 		}
 		out.WriteRune(r)

@@ -71,7 +71,12 @@ Request options:
   --json JSON              JSON body; use - for stdin.
   --json-file PATH         Read a JSON body file.
   --format FORMAT          json|ndjson|text|raw|none.
-  --accept MIME            Override the HTTP Accept header.
+  --accept MIME            HTTP response negotiation, independent of local --format.
+  --header "Name: value"   Repeatable HTTP header; use profile/token for credentials.
+  --query "name=value"     Repeatable raw query parameter.
+  --http-timeout DURATION  Transport deadline (default 120s).
+  --response-meta FILE     Response status/headers as JSON; stdout remains the body.
+  --error-format json      Structured diagnostics on stderr.
   --save-token-profile NAME Store a token returned by a generic JSON request.
 `
 

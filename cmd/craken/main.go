@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,7 +26,7 @@ func main() {
 		}
 	}()
 	if err := craken.Run(ctx, version, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		craken.WriteError(os.Stderr, err, os.Args[1:])
 		var interrupted *signalCancellation
 		if errors.As(context.Cause(ctx), &interrupted) {
 			if interrupted.signal == syscall.SIGTERM {

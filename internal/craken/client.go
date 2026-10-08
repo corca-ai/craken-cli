@@ -19,11 +19,13 @@ import (
 const d1BookmarkHeader = "x-d1-bookmark"
 
 type client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
-	bookmark   string
-	logger     *logger
+	baseURL       string
+	token         string
+	httpClient    *http.Client
+	bookmark      string
+	logger        *logger
+	lastResponse  *responseEvidence
+	resolverReads map[string]any
 }
 
 func newClient(cmd command, log *logger) (*client, error) {
@@ -47,10 +49,11 @@ func newClientWithAuthRequirement(cmd command, log *logger, requireToken bool) (
 		return nil, fmt.Errorf("bearer token is required. Run auth import-token, set CRAKEN_TOKEN, or pass --token/--bearer-token")
 	}
 	return &client{
-		baseURL:    baseURL,
-		token:      token,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
-		logger:     log,
+		baseURL:       baseURL,
+		token:         token,
+		httpClient:    &http.Client{Timeout: httpTimeout(cmd), CheckRedirect: sameOriginRedirect},
+		resolverReads: map[string]any{},
+		logger:        log,
 	}, nil
 }
 
@@ -61,12 +64,25 @@ func (c *client) json(ctx context.Context, path string) (any, error) {
 func (c *client) raw(ctx context.Context, method string, path string, spec requestSpec) (*http.Response, error) {
 	endpoint, err := c.resolve(path)
 	if err != nil {
-		return nil, err
+		return nil, stageError("prepare", err, nil)
+	}
+	if c.token != "" {
+		base, _ := url.Parse(c.baseURL)
+		if endpoint.Scheme != base.Scheme || endpoint.Host != base.Host {
+			return nil, fmt.Errorf("refusing to send bearer credentials to another origin")
+		}
+	}
+	for name, values := range spec.Query {
+		query := endpoint.Query()
+		for _, value := range values {
+			query.Add(name, value)
+		}
+		endpoint.RawQuery = query.Encode()
 	}
 	var body io.Reader
 	if spec.Body != nil {
 		body = spec.Body
-	} else if spec.JSONBody != nil && method != http.MethodGet {
+	} else if (spec.JSONBody != nil || spec.HasJSONBody) && method != http.MethodGet {
 		bytes, err := json.Marshal(spec.JSONBody)
 		if err != nil {
 			return nil, err
@@ -75,7 +91,9 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 		if spec.Headers == nil {
 			spec.Headers = http.Header{}
 		}
-		spec.Headers.Set("Content-Type", "application/json")
+		if spec.Headers.Get("Content-Type") == "" {
+			spec.Headers.Set("Content-Type", "application/json")
+		}
 	}
 	request, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), endpoint.String(), body)
 	if err != nil {
@@ -99,7 +117,14 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 	started := time.Now()
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, stageError("request", err, nil)
+	}
+	c.lastResponse = responseInfo(response)
+	if spec.MetadataPath != "" {
+		if err := writeResponseMetadata(spec.MetadataPath, c.lastResponse); err != nil {
+			_ = response.Body.Close()
+			return nil, stageError("local-persist", err, c.lastResponse)
+		}
 	}
 	if bookmark := response.Header.Get(d1BookmarkHeader); bookmark != "" {
 		c.bookmark = bookmark
@@ -107,18 +132,10 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 	c.logger.line("http", fmt.Sprintf(`{"durationMs":%d,"method":%q,"path":%q,"status":%d,"updatedBookmark":%t}`,
 		time.Since(started).Milliseconds(), request.Method, endpoint.RequestURI(), response.StatusCode, response.Header.Get(d1BookmarkHeader) != ""))
 
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		contentType := response.Header.Get("Content-Type")
-		if !strings.Contains(contentType, "json") {
-			defer func() { _ = response.Body.Close() }()
-			text, _ := io.ReadAll(response.Body)
-			return nil, fmt.Errorf("%s %s failed with %d: %s", method, path, response.StatusCode, string(text))
-		}
-	}
 	return response, nil
 }
 
-func (c *client) multipart(ctx context.Context, method string, path string, fields map[string]string, fileField string, filePath string, fileName string, contentType string, headers http.Header) (any, error) {
+func (c *client) multipart(ctx context.Context, method string, path string, fields map[string]string, fileField string, filePath string, fileName string, contentType string, headers http.Header, cmd command) (any, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	for key, value := range fields {
@@ -152,7 +169,7 @@ func (c *client) multipart(ctx context.Context, method string, path string, fiel
 		headers = http.Header{}
 	}
 	headers.Set("Content-Type", writer.FormDataContentType())
-	return c.jsonFromResponse(ctx, method, path, requestSpec{Body: bytesReader(body.Bytes()), Headers: headers})
+	return c.jsonFromResponse(ctx, method, path, requestSpec{Body: bytesReader(body.Bytes()), Headers: headers, Query: rawQuery(cmd), MetadataPath: cmd.string("response-meta", "")})
 }
 
 func (c *client) jsonFromResponse(ctx context.Context, method string, path string, spec requestSpec) (any, error) {
@@ -160,21 +177,18 @@ func (c *client) jsonFromResponse(ctx context.Context, method string, path strin
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = response.Body.Close() }()
-	text, err := io.ReadAll(response.Body)
+	payload, err := readPayload(response, method, path)
 	if err != nil {
 		return nil, err
 	}
-	var parsed any
-	if len(text) > 0 {
-		if err := json.Unmarshal(text, &parsed); err != nil {
-			return nil, err
+	if payload.Parsed == nil && payload.Text != "" {
+		var value any
+		if err := json.Unmarshal([]byte(payload.Text), &value); err != nil {
+			return nil, stageError("decode", err, payload.Evidence)
 		}
+		return value, nil
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s %s failed with %d: %s", method, path, response.StatusCode, string(text))
-	}
-	return parsed, nil
+	return payload.Parsed, nil
 }
 
 func (c *client) resolve(path string) (*url.URL, error) {
@@ -186,9 +200,12 @@ func (c *client) resolve(path string) (*url.URL, error) {
 }
 
 type requestSpec struct {
-	Body     io.Reader
-	Headers  http.Header
-	JSONBody any
+	Body         io.Reader
+	Headers      http.Header
+	JSONBody     any
+	HasJSONBody  bool
+	Query        url.Values
+	MetadataPath string
 }
 
 func bytesReader(data []byte) io.Reader {
@@ -200,4 +217,21 @@ func escapeQuotes(value string) string {
 	// multipart Content-Disposition header line, so an unescaped CR/LF in a
 	// filename or field name could inject header lines or split the part.
 	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"", "\r", "", "\n", "").Replace(value)
+}
+
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("too many redirects")
+	}
+	if len(via) > 0 && (req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host) {
+		return fmt.Errorf("refusing cross-origin redirect")
+	}
+	return nil
+}
+func writeResponseMetadata(path string, evidence *responseEvidence) error {
+	data, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Clean(path), append(data, '\n'), 0o600)
 }

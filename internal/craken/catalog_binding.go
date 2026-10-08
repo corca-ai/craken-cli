@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -229,6 +230,15 @@ func resolveCatalogValue(
 	resolved map[string]string,
 	fieldName string,
 ) (string, error) {
+	if plan.IDPattern != "" {
+		pattern, err := regexp.Compile(plan.IDPattern)
+		if err != nil {
+			return "", fmt.Errorf("invalid resolver ID pattern: %w", err)
+		}
+		if pattern.MatchString(value) {
+			return value, nil
+		}
+	}
 	route := routeByID(routes, plan.OperationID)
 	if route == nil {
 		return "", fmt.Errorf("unknown resolver operation: %s", plan.OperationID)
@@ -237,7 +247,18 @@ func resolveCatalogValue(
 	if err != nil {
 		return "", err
 	}
-	root, err := client.json(ctx, path)
+	root, exists := client.resolverReads[path]
+	var errRead error
+	if !exists {
+		root, errRead = client.json(ctx, path)
+		if errRead == nil {
+			if client.resolverReads == nil {
+				client.resolverReads = map[string]any{}
+			}
+			client.resolverReads[path] = root
+		}
+	}
+	err = errRead
 	if err != nil {
 		return "", err
 	}
