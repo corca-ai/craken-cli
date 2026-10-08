@@ -15,6 +15,8 @@ const (
 )
 
 type command struct {
+	RawArgs     []string
+	Values      map[string][]string
 	Resource    string
 	Action      string
 	Options     map[string]string
@@ -43,6 +45,10 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 	}
 	if cmd.Help || cmd.Resource == "" || cmd.Resource == "help" {
 		return runHelp(ctx, cmd, logger, stdout, stderr)
+	}
+
+	if err := validateLocalOptions(cmd); err != nil {
+		return err
 	}
 
 	if cmd.Resource == "auth" {
@@ -82,14 +88,23 @@ func Run(ctx context.Context, version string, args []string, stdin io.Reader, st
 }
 
 func parseCommand(args []string) (command, error) {
-	cmd := command{Options: map[string]string{}, Flags: map[string]bool{}}
+	return parseCommandWithFlags(args, localBooleanOptions)
+}
+
+func parseCommandWithFlags(args []string, booleanOptions map[string]bool) (command, error) {
+	cmd := command{RawArgs: append([]string(nil), args...), Values: map[string][]string{}, Options: map[string]string{}, Flags: map[string]bool{}}
+	positionalOnly := false
 	for i := 0; i < len(args); i++ {
 		current := args[i]
-		if current == "--help" || current == "-h" {
+		if current == "--" && !positionalOnly {
+			positionalOnly = true
+			continue
+		}
+		if !positionalOnly && (current == "--help" || current == "-h") {
 			cmd.Help = true
 			continue
 		}
-		if len(current) > 2 && current[:2] == "--" {
+		if !positionalOnly && len(current) > 2 && current[:2] == "--" {
 			raw := current[2:]
 			name, inline, hasInline := splitOption(raw)
 			if name == "" {
@@ -97,13 +112,21 @@ func parseCommand(args []string) (command, error) {
 			}
 			if hasInline {
 				cmd.Options[name] = inline
+				cmd.Values[name] = append(cmd.Values[name], inline)
 				continue
 			}
-			if i+1 >= len(args) || hasOptionPrefix(args[i+1]) {
+			if booleanOptions[name] && (i+1 >= len(args) || (args[i+1] != "true" && args[i+1] != "false")) {
 				cmd.Flags[name] = true
+				cmd.Values[name] = append(cmd.Values[name], "true")
+				continue
+			}
+			if i+1 >= len(args) || hasOptionPrefix(args[i+1]) || args[i+1] == "--" {
+				cmd.Flags[name] = true
+				cmd.Values[name] = append(cmd.Values[name], "true")
 				continue
 			}
 			cmd.Options[name] = args[i+1]
+			cmd.Values[name] = append(cmd.Values[name], args[i+1])
 			i++
 			continue
 		}
@@ -180,6 +203,11 @@ func runHelp(ctx context.Context, cmd command, logger *logger, stdout, stderr io
 	catalog, err := catalogFromValue(value)
 	if err != nil {
 		return printHelpFallback(stdout, stderr, cmd, client, err)
+	}
+	if cmd.string("format", "") == "json" {
+		if selectedCommand, selectedRoute := focusedHelpTarget(cmd, catalog); selectedCommand != nil || selectedRoute != nil {
+			return printFocusedHelpJSON(stdout, value, cmd, selectedCommand, selectedRoute)
+		}
 	}
 	if shown, err := printResourceHelp(stdout, cmd, catalog); shown || err != nil {
 		if err != nil {

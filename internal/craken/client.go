@@ -49,7 +49,7 @@ func newClientWithAuthRequirement(cmd command, log *logger, requireToken bool) (
 	return &client{
 		baseURL:    baseURL,
 		token:      token,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		httpClient: &http.Client{Timeout: httpTimeout(cmd)},
 		logger:     log,
 	}, nil
 }
@@ -63,10 +63,17 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 	if err != nil {
 		return nil, err
 	}
+	for name, values := range spec.Query {
+		query := endpoint.Query()
+		for _, value := range values {
+			query.Add(name, value)
+		}
+		endpoint.RawQuery = query.Encode()
+	}
 	var body io.Reader
 	if spec.Body != nil {
 		body = spec.Body
-	} else if spec.JSONBody != nil && method != http.MethodGet {
+	} else if (spec.JSONBody != nil || spec.HasJSONBody) && method != http.MethodGet {
 		bytes, err := json.Marshal(spec.JSONBody)
 		if err != nil {
 			return nil, err
@@ -75,7 +82,9 @@ func (c *client) raw(ctx context.Context, method string, path string, spec reque
 		if spec.Headers == nil {
 			spec.Headers = http.Header{}
 		}
-		spec.Headers.Set("Content-Type", "application/json")
+		if spec.Headers.Get("Content-Type") == "" {
+			spec.Headers.Set("Content-Type", "application/json")
+		}
 	}
 	request, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), endpoint.String(), body)
 	if err != nil {
@@ -186,9 +195,11 @@ func (c *client) resolve(path string) (*url.URL, error) {
 }
 
 type requestSpec struct {
-	Body     io.Reader
-	Headers  http.Header
-	JSONBody any
+	Body        io.Reader
+	Headers     http.Header
+	JSONBody    any
+	HasJSONBody bool
+	Query       url.Values
 }
 
 func bytesReader(data []byte) io.Reader {

@@ -16,21 +16,22 @@ import (
 var pathParamPattern = regexp.MustCompile(`\{([^}/]+)\}`)
 
 type route struct {
-	ID              string            `json:"id"`
-	Execution       *commandExecution `json:"execution,omitempty"`
-	Method          string            `json:"method"`
-	Path            string            `json:"path"`
-	Description     string            `json:"description"`
-	Auth            string            `json:"auth"`
-	Capability      string            `json:"capability,omitempty"`
-	PathParams      []catalogField    `json:"pathParams,omitempty"`
-	PathParameters  []catalogField    `json:"pathParameters,omitempty"`
-	QueryParams     []catalogField    `json:"queryParams,omitempty"`
-	QueryParameters []catalogField    `json:"queryParameters,omitempty"`
-	BodyFields      []catalogField    `json:"bodyFields,omitempty"`
-	RequestBody     string            `json:"requestBody"`
-	ResponseExample any               `json:"responseExample,omitempty"`
-	Stream          string            `json:"stream,omitempty"`
+	Specification   *operationSpecification `json:"specification,omitempty"`
+	ID              string                  `json:"id"`
+	Execution       *commandExecution       `json:"execution,omitempty"`
+	Method          string                  `json:"method"`
+	Path            string                  `json:"path"`
+	Description     string                  `json:"description"`
+	Auth            string                  `json:"auth"`
+	Capability      string                  `json:"capability,omitempty"`
+	PathParams      []catalogField          `json:"pathParams,omitempty"`
+	PathParameters  []catalogField          `json:"pathParameters,omitempty"`
+	QueryParams     []catalogField          `json:"queryParams,omitempty"`
+	QueryParameters []catalogField          `json:"queryParameters,omitempty"`
+	BodyFields      []catalogField          `json:"bodyFields,omitempty"`
+	RequestBody     string                  `json:"requestBody"`
+	ResponseExample any                     `json:"responseExample,omitempty"`
+	Stream          string                  `json:"stream,omitempty"`
 }
 
 type clientCatalog struct {
@@ -290,31 +291,32 @@ func runDo(ctx context.Context, client *client, cmd command, stdout io.Writer, s
 		if executionRoute == nil {
 			return fmt.Errorf("unknown operation for %s: %s", selected.ID, plan.OperationID)
 		}
+		cmd, err = reparseCatalogCommand(cmd, plan, *executionRoute)
+		if err != nil {
+			return err
+		}
+		if err := validateCatalogInputs(cmd, *executionRoute, plan, true); err != nil {
+			return err
+		}
 		path, resolved, consumed, err := discoveredRoutePath(ctx, client, routes, *executionRoute, cmd)
 		if err != nil {
 			return err
 		}
 		return executeCatalogTransport(ctx, client, routes, *executionRoute, plan, cmd, path, resolved, consumed, stdout, stdin, stderr)
 	}
-	if selected.Stream == "websocket" {
-		return fmt.Errorf("operation %s is a stream. Use the resource-specific tail command for realtime subscriptions", operationID)
-	}
-	requestPath, spec, err := requestFromDiscoveredRoute(ctx, client, routes, *selected, cmd, stdin)
+	plan := commandExecution{OperationID: selected.ID, Transport: commandTransportHTTP}
+	cmd, err = reparseCatalogCommand(cmd, plan, *selected)
 	if err != nil {
 		return err
 	}
-	response, err := client.raw(ctx, selected.Method, requestPath, spec)
+	if err := validateCatalogInputs(cmd, *selected, plan, true); err != nil {
+		return err
+	}
+	path, resolved, consumed, err := discoveredRoutePath(ctx, client, routes, *selected, cmd)
 	if err != nil {
 		return err
 	}
-	payload, err := readPayload(response, selected.Method, requestPath)
-	if err != nil {
-		return err
-	}
-	if err := saveTokenProfile(client, cmd.string("save-token-profile", ""), payload.Parsed); err != nil {
-		return err
-	}
-	return printPayload(stdout, payload, cmd)
+	return executeCatalogTransport(ctx, client, routes, *selected, plan, cmd, path, resolved, consumed, stdout, stdin, stderr)
 }
 
 func runRawHTTP(ctx context.Context, client *client, method string, path string, cmd command, stdout io.Writer, stdin io.Reader) error {
@@ -514,7 +516,7 @@ func requestFromDiscoveredRoute(ctx context.Context, client *client, routes []ro
 	if requestBody == "none" && hasExplicit {
 		return "", requestSpec{}, fmt.Errorf("operation %s does not accept a JSON body", route.ID)
 	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd)}
 	if route.Method == http.MethodGet || (route.Method == http.MethodDelete && requestBody == "none") || requestBody == "none" {
 		return appendQuery(path, values), spec, nil
 	}
@@ -537,20 +539,27 @@ func rawRequestFromOptions(method string, cmd command, stdin io.Reader) (request
 		}
 		hasBody = true
 	}
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd)}
 	if hasBody && method != http.MethodGet {
 		spec.JSONBody = body
+		spec.HasJSONBody = true
 	}
 	return spec, nil
 }
 
 func requestHeadersFromOptions(cmd command) http.Header {
 	headers := http.Header{}
+	for _, input := range cmd.Values["header"] {
+		name, value, ok := strings.Cut(input, ":")
+		if ok {
+			headers.Add(strings.TrimSpace(name), strings.TrimSpace(value))
+		}
+	}
 	accept := cmd.string("accept", "")
 	if accept == "" {
-		accept = acceptFromFormat(cmd.string("format", ""))
+		accept = "application/json"
 	}
-	if accept != "" {
+	if accept != "" && headers.Get("Accept") == "" {
 		headers.Set("Accept", accept)
 	}
 	return headers
@@ -647,6 +656,7 @@ func printPayload(stdout io.Writer, payload responsePayload, cmd command) error 
 
 func requestValuesFromOptions(cmd command, consumed map[string]bool) map[string]any {
 	generic := map[string]bool{
+		"header": true, "query": true, "http-timeout": true, "response-meta": true, "error-format": true,
 		"accept": true, "base-url": true, "body-file": true, "body-json": true, "format": true,
 		"json": true, "json-file": true, "log-file": true, "profile": true, "save-token-profile": true,
 		"token": true, "bearer-token": true,

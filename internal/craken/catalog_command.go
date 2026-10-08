@@ -42,6 +42,17 @@ func runCatalogCommand(ctx context.Context, client *client, cmd command, stdout 
 	if selectedRoute == nil {
 		return fmt.Errorf("unknown operation for %s: %s", serverCommand.ID, plan.OperationID)
 	}
+	cmd, err = reparseCatalogCommand(cmd, plan, *selectedRoute)
+	if err != nil {
+		return err
+	}
+	plan = selectedExecution(*serverCommand, cmd)
+	if plan.Transport == "" {
+		plan.Transport = commandTransportHTTP
+	}
+	if err := validateCatalogInputs(cmd, *selectedRoute, plan, false); err != nil {
+		return err
+	}
 	requestPath, resolved, consumed, err := catalogCommandPath(ctx, client, catalog.Routes, *selectedRoute, plan, cmd)
 	if err != nil {
 		return err
@@ -211,7 +222,7 @@ func catalogHTTPRequest(
 	consumed map[string]bool,
 	stdin io.Reader,
 ) (string, requestSpec, error) {
-	spec := requestSpec{Headers: requestHeadersFromOptions(cmd)}
+	spec := requestSpec{Headers: requestHeadersFromOptions(cmd), Query: rawQuery(cmd)}
 	explicitBody, hasExplicitBody, err := jsonBodyFromOptions(cmd, stdin)
 	if err != nil {
 		return "", requestSpec{}, err
@@ -230,20 +241,34 @@ func catalogHTTPRequest(
 	if err != nil {
 		return "", requestSpec{}, err
 	}
-	if plan.QueryParams == nil {
+	if route.Specification != nil {
+		if plan.QueryParams == nil {
+			values, err = wireOptions(cmd, route.Specification.Wire.Query)
+		} else {
+			values, err = convertBoundWire(values, route.Specification.Wire.Query)
+		}
+		if err != nil {
+			return "", requestSpec{}, err
+		}
+	} else if plan.QueryParams == nil {
 		values = requestValuesFromOptions(cmd, consumed)
 	}
 	if route.Method == http.MethodGet || (route.Method == http.MethodDelete && requestBody == "none") || requestBody == "none" {
-		return appendQuery(path, values), spec, nil
+		path, err = appendWireQuery(path, values, route)
+		return path, spec, err
 	}
 	// A body method (POST/PATCH/PUT) can still declare query params; append the
 	// resolved query values to the path so a command that combines query params
 	// with a JSON body sends both rather than dropping the query.
-	if plan.QueryParams != nil {
-		path = appendQuery(path, values)
+	if plan.QueryParams != nil || route.Specification != nil {
+		path, err = appendWireQuery(path, values, route)
+		if err != nil {
+			return "", requestSpec{}, err
+		}
 	}
 	if hasExplicitBody {
 		spec.JSONBody = explicitBody
+		spec.HasJSONBody = true
 		return path, spec, nil
 	}
 	if plan.BodyFields != nil {
@@ -251,10 +276,24 @@ func catalogHTTPRequest(
 		if err != nil {
 			return "", requestSpec{}, err
 		}
-		spec.JSONBody = compact(body)
+		if route.Specification != nil {
+			body, err = convertBoundWire(body, route.Specification.Wire.Body)
+			if err != nil {
+				return "", requestSpec{}, err
+			}
+		}
+		spec.JSONBody = body
 		return path, spec, nil
 	}
-	spec.JSONBody = compact(requestValuesFromOptions(cmd, consumed))
+	if route.Specification != nil {
+		body, err := wireOptions(cmd, route.Specification.Wire.Body)
+		if err != nil {
+			return "", requestSpec{}, err
+		}
+		spec.JSONBody = body
+	} else {
+		spec.JSONBody = compact(requestValuesFromOptions(cmd, consumed))
+	}
 	return path, spec, nil
 }
 
@@ -264,9 +303,12 @@ func runCatalogDownloadCommand(ctx context.Context, client *client, routes []rou
 		if err != nil {
 			return err
 		}
-		path = appendQuery(path, values)
+		path, err = appendWireQuery(path, values, route)
+		if err != nil {
+			return err
+		}
 	}
-	response, err := client.raw(ctx, route.Method, path, requestSpec{Headers: requestHeadersFromOptions(cmd)})
+	response, err := client.raw(ctx, route.Method, path, requestSpec{Headers: downloadHeaders(cmd), Query: rawQuery(cmd)})
 	if err != nil {
 		return err
 	}
@@ -333,13 +375,16 @@ func runCatalogMultipartCommand(
 		if err != nil {
 			return err
 		}
-		path = appendQuery(path, query)
+		path, err = appendWireQuery(path, query, route)
+		if err != nil {
+			return err
+		}
 	}
 	parsed, err := client.multipart(ctx, route.Method, path, fields, multipartPlan.FileField, filePath, fileName, contentType, requestHeadersFromOptions(cmd))
 	if err != nil {
 		return err
 	}
-	return printJSON(stdout, parsed)
+	return printCatalogCommandPayload(stdout, responsePayload{Parsed: parsed}, cmd, plan.Output)
 }
 
 func printCatalogCommandPayload(stdout io.Writer, payload responsePayload, cmd command, output *commandOutputPlan) error {
