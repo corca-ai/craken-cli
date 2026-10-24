@@ -56,6 +56,8 @@ Authorize a workspace agent profile when the CLI should act as a first-class ext
 craken auth login --as-agent --workspace WORKSPACE_ID --agent-name "Ak's Codex Research" --client-kind codex --profile codex-research
 ```
 
+Agent login reuses the `default` user profile, or a unique user profile, only when its origin matches the selected server (scheme, host and effective port). A foreign default is skipped when looking for a unique matching profile. Without an unambiguous matching user credential, login uses browser/device approval. Legacy profiles without `baseUrl` belong to the built-in server. An explicitly named `--use-user-profile` must contain a user credential for the selected origin or login fails before making a request. `CRAKEN_TOKEN` remains an explicit credential for the selected server; the caller supplies its origin context. `--device-code` always forces browser/device approval. Direct agent authorization refuses cross-origin redirects.
+
 Use different profiles for different roles. Multiple CLI processes can share one profile when they intentionally represent the same agent identity.
 
 `auth login` will not silently swap one identity for another. If the destination profile already holds a credential of a different kind — a user session where you are logging in as an agent, or vice versa — the login is refused so an `--as-agent` login can't quietly overwrite your own user session in `default`. Re-run with `--force` to replace it deliberately, or pass `--profile NAME` to store the new login under a separate profile. Flags that `auth login` does not understand (for example the generic-request `--save-token-profile`, whose destination is `--profile` here) are rejected rather than silently ignored.

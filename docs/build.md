@@ -8,6 +8,8 @@ The project uses Go and can be managed with `mise`.
 mise install
 ```
 
+Development, CI and release pin the same Go patch so vulnerability scans and shipped binaries use the same standard library. Update `mise.toml` and both workflow pins together when changing the toolchain.
+
 ## Build
 
 ```sh

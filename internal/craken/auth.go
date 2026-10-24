@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -599,7 +601,10 @@ func authorizeAgent(ctx context.Context, cfg config, cmd command, baseURL string
 	if boolOption(cmd, "device-code") {
 		return receiveAgentDeviceLogin(ctx, baseURL, timeout, request, boolOption(cmd, "no-open"), stderr)
 	}
-	userToken := userTokenForAgentLogin(cfg, cmd)
+	userToken, err := userTokenForAgentLogin(cfg, cmd, baseURL)
+	if err != nil {
+		return loginResult{}, err
+	}
 	if userToken == "" {
 		return receiveAgentDeviceLogin(ctx, baseURL, timeout, request, boolOption(cmd, "no-open"), stderr)
 	}
@@ -616,38 +621,85 @@ func authorizeAgent(ctx context.Context, cfg config, cmd command, baseURL string
 	return loginResult{}, err
 }
 
-// userTokenForAgentLogin resolves the user bearer token used to authorize an
-// agent without a browser round-trip. Precedence: explicit --use-user-profile,
-// then CRAKEN_TOKEN, then the "default" profile, then a single user profile if
-// exactly one exists. Agent profiles are never used to mint further agents.
-func userTokenForAgentLogin(cfg config, cmd command) string {
+// userTokenForAgentLogin binds stored credentials to the selected destination
+// before extracting the token. Environment credentials are an explicit override
+// for that destination; they have no stored profile origin to infer.
+func userTokenForAgentLogin(cfg config, cmd command, baseURL string) (string, error) {
 	if name := cmd.string("use-user-profile", ""); name != "" {
-		return trim(cfg.Profiles[name].Token)
+		token := agentLoginProfileToken(cfg.Profiles[name], baseURL)
+		if token == "" {
+			return "", fmt.Errorf("user profile %q has no user credential for this origin; choose a matching profile or use --device-code", name)
+		}
+		return token, nil
 	}
 	if env := getenvTrim("CRAKEN_TOKEN"); env != "" {
-		return env
+		return env, nil
 	}
-	if prof, ok := cfg.Profiles["default"]; ok && trim(prof.Token) != "" && prof.Kind != "agent" {
-		return trim(prof.Token)
+	if token := agentLoginProfileToken(cfg.Profiles["default"], baseURL); token != "" {
+		return token, nil
 	}
 	token := ""
 	count := 0
 	for _, prof := range cfg.Profiles {
-		if trim(prof.Token) != "" && prof.Kind != "agent" {
-			token = trim(prof.Token)
+		if candidate := agentLoginProfileToken(prof, baseURL); candidate != "" {
+			token = candidate
 			count++
 		}
 	}
 	if count == 1 {
-		return token
+		return token, nil
 	}
-	return ""
+	return "", nil
+}
+
+func agentLoginProfileToken(prof profile, baseURL string) string {
+	if trim(prof.Token) == "" || prof.Kind == "agent" {
+		return ""
+	}
+	// Legacy profiles without a URL belong to the built-in server, never to an
+	// environment or command-line override of the destination.
+	source, validSource := agentLoginOrigin(firstNonEmpty(trim(prof.BaseURL), defaultBaseURL))
+	destination, validDestination := agentLoginOrigin(baseURL)
+	if !validSource || !validDestination || source != destination {
+		return ""
+	}
+	return trim(prof.Token)
+}
+
+// Paths do not change origin. Normalize host case and effective ports, but
+// preserve an IPv6 zone's case because it identifies a local interface.
+func agentLoginOrigin(raw string) (string, bool) {
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.User != nil || endpoint.Hostname() == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(endpoint.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", false
+	}
+	port := endpoint.Port()
+	if port == "" {
+		port = "80"
+		if scheme == "https" {
+			port = "443"
+		}
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return "", false
+	}
+	host, zone, zoned := strings.Cut(endpoint.Hostname(), "%")
+	host = strings.ToLower(host)
+	if zoned {
+		host += "%" + zone
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(number)), true
 }
 
 // receiveAgentSession mints an agent bearer token from the authenticated
 // /api/client/agent-sessions endpoint using the caller's existing user token.
 func receiveAgentSession(ctx context.Context, baseURL string, userToken string, request agentLoginRequest) (loginResult, error) {
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: 30 * time.Second, CheckRedirect: sameOriginRedirect}
 	var token deviceTokenResponse
 	status, raw, err := postJSONWithToken(ctx, httpClient, baseURL, "/api/client/agent-sessions", userToken, request, &token)
 	if err != nil {
