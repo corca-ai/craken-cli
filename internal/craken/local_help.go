@@ -30,7 +30,7 @@ Login options:
   --client-kind KIND        Agent client kind (default custom; for example codex or claude_code).
   --client-label LABEL      Optional description of this agent client.
   --scopes LIST             Optional comma-separated delegation scopes.
-  --use-user-profile NAME   User credential for direct agent authorization.
+  --use-user-profile NAME   Same-origin user credential for direct agent authorization.
   --device-code             Force agent browser/device approval.
   --no-device-fallback      Do not fall back after an unsupported direct authorization endpoint.
   --no-open                 Print the verification URL without opening a browser.
